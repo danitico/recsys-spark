@@ -97,9 +97,9 @@ object Main {
     val colSeparators = new IntListBufferAccumulator
     val values = new DoubleListBufferAccumulator
 
-    spark.sparkContext.register(rowIndices, "valores")
-    spark.sparkContext.register(colSeparators, "separador_columnas")
-    spark.sparkContext.register(values, "indice_files")
+    spark.sparkContext.register(rowIndices, "ratings")
+    spark.sparkContext.register(colSeparators, "col_separator")
+    spark.sparkContext.register(values, "row_indices")
 
     (rowIndices, colSeparators, values)
   }
@@ -137,8 +137,8 @@ object Main {
   }
 
   def pearsonSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
-    val mean1 = (firstArray.sum / firstArray.length)
-    val mean2 = (secondArray.sum / secondArray.length)
+    val mean1 = firstArray.sum / firstArray.length
+    val mean2 = secondArray.sum / secondArray.length
 
     val differencesFirstArray = firstArray.map(_ - mean1)
     val differencesSecondArray = secondArray.map(_ - mean2)
@@ -163,7 +163,7 @@ object Main {
   }
 
   def euclideanSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
-    // + 1 al denominador para evitar la división por cero
+    // sum one to the denominator in order to avoid division by zero
 
     1 / (sqrt(firstArray.zip(secondArray).map {case (a, b) => pow(a - b, 2)}.sum) + 1)
   }
