@@ -97,12 +97,9 @@ class ItemBased(session: SparkSession) {
     correlations.zip(this.itemUserMatrix.rowIter).sortWith(_._1 > _._1).take(k)
   }
 
-/*  def predictionRatingItem(targetItem: Array[Double], item: Int): Double = {
-    val topKItems = this.getKSimilarItems(targetItem, 25)
-    val ratingMean = targetItem.sum / targetItem.length
-
+  def ratingCalculation(topKItems: List[(Double, Vector)], ratingMean: Double, user: Int): Double = {
     val numerator = topKItems.map(a => {
-      a._1 * a._2(item)
+      a._1 * a._2(user)
     }).sum
 
     val denominator = topKItems.map(_._1).reduce(abs(_) + abs(_))
@@ -110,11 +107,10 @@ class ItemBased(session: SparkSession) {
     ratingMean + (numerator/denominator)
   }
 
-  def topKItemsForUser(targetItem: Array[Double], k: Int): List[(Int, Double)] = {
-    val unratedItems = targetItem.zipWithIndex.filter(_._1 == 0).map(_._2)
+  def predictionRatingItem(targetItem: Array[Double], user: Int): Double = {
+    val topKItems = this.getKSimilarItems(targetItem, 25)
+    val ratingMean = targetItem.sum / targetItem.length
 
-    unratedItems.map(item => {
-      (item, this.predictionRatingItem(targetItem, item))
-    }).sortWith(_._1 > _._1).take(k).toList
-  }*/
+    this.ratingCalculation(topKItems, ratingMean, user)
+  }
 }

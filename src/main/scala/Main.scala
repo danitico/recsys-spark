@@ -1,22 +1,31 @@
+import item_based.ItemBased
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.ml.linalg.Vectors
-
-import similarity.PearsonSimilarity
+import similarity.{CosineSimilarity, EuclideanSimilarity, PearsonSimilarity}
 import user_based.UserBased
 
 object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master("local[*]").appName("TFM").getOrCreate()
 
-    var recSys = new UserBased(spark)
+    val recSysItemBased = new ItemBased(spark)
+    recSysItemBased.readDataset("train.csv")
+    recSysItemBased.calculateDenseMatrix()
+    recSysItemBased.setSimilarityMeasure(new PearsonSimilarity)
 
-    recSys.readDataset("train.csv")
-    recSys.calculateDenseMatrix()
-    recSys.setSimilarityMeasure(new PearsonSimilarity)
+    val targetItem = recSysItemBased.itemUserMatrix.rowIter.slice(259, 260).toList.head.toArray
 
-    val newUser = recSys.userItemMatrix.rowIter.slice(0, 1).toList.head.toArray
+    println(recSysItemBased.predictionRatingItem(targetItem, 0))
 
-    println(recSys.predictionRatingItem(newUser, 38))
+    val recSysUserBased = new UserBased(spark)
+
+    recSysUserBased.readDataset("train.csv")
+    recSysUserBased.calculateDenseMatrix()
+    recSysUserBased.setSimilarityMeasure(new EuclideanSimilarity)
+
+    val newUser = recSysUserBased.userItemMatrix.rowIter.slice(0, 1).toList.head.toArray
+
+    println(recSysUserBased.predictionRatingItem(newUser, 259))
 /*
     val indices = newUser.zipWithIndex.filter(_._1 > 0).map(_._2)
 

@@ -1,11 +1,11 @@
 package user_based
 
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import scala.math.abs
+
 import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix, Vector}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, StructField, StructType}
-
-import scala.math.abs
 
 import accumulators.{DoubleListBufferAccumulator, IntListBufferAccumulator}
 import similarity.Similarity
@@ -99,10 +99,7 @@ class UserBased(session: SparkSession) {
     correlations.zip(this.userItemMatrix.rowIter).sortWith(_._1 > _._1).take(k)
   }
 
-  def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
-    val topKUsers = this.getKSimilarUsers(targetUser, 25)
-    val ratingMean = targetUser.sum / targetUser.length
-
+  def ratingCalculation(topKUsers: List[(Double, Vector)], ratingMean: Double, item: Int): Double = {
     val numerator = topKUsers.map(a => {
       a._1 * a._2(item)
     }).sum
@@ -112,11 +109,20 @@ class UserBased(session: SparkSession) {
     ratingMean + (numerator/denominator)
   }
 
+  def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
+    val topKUsers = this.getKSimilarUsers(targetUser, 25)
+    val ratingMean = targetUser.sum / targetUser.length
+
+    this.ratingCalculation(topKUsers, ratingMean, item)
+  }
+
   def topKItemsForUser(targetUser: Array[Double], k: Int): List[(Int, Double)] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
+    val ratingMean = targetUser.sum / targetUser.length
+    val topKUsers = this.getKSimilarUsers(targetUser, 25)
 
     unratedItems.map(item => {
-      (item, this.predictionRatingItem(targetUser, item))
-    }).sortWith(_._1 > _._1).take(k).toList
+      (item, this.ratingCalculation(topKUsers, ratingMean, item))
+    }).sortWith(_._2 > _._2).take(k).toList
   }
 }

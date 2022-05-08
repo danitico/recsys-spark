@@ -13,5 +13,4 @@ class CosineSimilarity extends Similarity {
 
     numerator / denominator
   }
-
 }
