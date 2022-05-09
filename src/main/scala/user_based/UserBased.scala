@@ -91,12 +91,14 @@ class UserBased(session: SparkSession) {
     this.userItemMatrix = denseMatrix
   }
 
-  def getKSimilarUsers(targetUser: Array[Double], k: Int): List[(Double, Vector)] = {
-    val correlations = this.userItemMatrix.rowIter.map(
-      f => this.similarity.getSimilarity(targetUser, f.toArray)
-    ).toList
+  def getKSimilarUsers(targetUser: Array[Double], k: Int, item: Int): List[(Double, Vector)] = {
+    val usersWithRating = this.userItemMatrix.rowIter.filter(array => array(item) > 0).toList
 
-    correlations.zip(this.userItemMatrix.rowIter).sortWith(_._1 > _._1).take(k)
+    val correlations = usersWithRating.map(
+      f => this.similarity.getSimilarity(targetUser, f.toArray)
+    )
+
+    correlations.zip(usersWithRating).sortWith(_._1 > _._1).take(k)
   }
 
   def ratingCalculation(topKUsers: List[(Double, Vector)], ratingMean: Double, item: Int): Double = {
@@ -110,19 +112,18 @@ class UserBased(session: SparkSession) {
   }
 
   def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
-    val topKUsers = this.getKSimilarUsers(targetUser, 25)
-    val ratingMean = targetUser.sum / targetUser.length
+    val topKUsers = this.getKSimilarUsers(targetUser, 5, item)
+    val ratedItems = targetUser.filter(_ > 0)
+    val ratingMean = ratedItems.sum / ratedItems.length
 
     this.ratingCalculation(topKUsers, ratingMean, item)
   }
 
   def topKItemsForUser(targetUser: Array[Double], k: Int): List[(Int, Double)] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
-    val ratingMean = targetUser.sum / targetUser.length
-    val topKUsers = this.getKSimilarUsers(targetUser, 25)
 
     unratedItems.map(item => {
-      (item, this.ratingCalculation(topKUsers, ratingMean, item))
+      (item, this.predictionRatingItem(targetUser, item))
     }).sortWith(_._2 > _._2).take(k).toList
   }
 }
