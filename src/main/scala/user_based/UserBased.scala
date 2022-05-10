@@ -16,8 +16,10 @@ class UserBased(session: SparkSession) {
   var dataframe: DataFrame = null
   var userItemMatrix: DenseMatrix = null
   var similarity: Similarity = null
+  var totalNumberOfItems: Int = -1
 
-  def readDataset(filename: String): Unit = {
+  def readDataset(filename: String, totalNumberOfItems: Int): Unit = {
+    this.totalNumberOfItems = totalNumberOfItems
     this.dataframe = this.spark.read.options(
       Map("header" -> "true")
     ).schema(
@@ -40,11 +42,10 @@ class UserBased(session: SparkSession) {
     this.similarity = similarityMeasure
   }
 
-  def getNumberUserAndItems: (Long, Long) = {
+  def getNumberUserAndItems: (Long, Int) = {
     val numberUsers = this.dataframe.select("user_id").distinct().count()
-    val numberItems = this.dataframe.select("item_id").distinct().count()
 
-    (numberUsers, numberItems)
+    (numberUsers, this.totalNumberOfItems)
   }
 
   def createAndRegisterAccumulators: (IntListBufferAccumulator, IntListBufferAccumulator, DoubleListBufferAccumulator) = {
@@ -66,6 +67,16 @@ class UserBased(session: SparkSession) {
       collect_list(col("rating")).as("ratings")
     ).drop("user_id").drop("rating")
 
+    val everyItem = Set.range(1, numberItems)
+
+    val actualItems = groupedDf.select(
+      "item_id"
+    ).collect().map(
+      _.getInt(0)
+    ).toSet
+
+    val notRatedItems = everyItem -- actualItems
+
     val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators
 
     groupedDf.foreach((row: Row) => {
@@ -80,10 +91,19 @@ class UserBased(session: SparkSession) {
       colSeparators.add(values.value.length)
     }: Unit)
 
+    val separators = 0 +: colSeparators.value
+
+    notRatedItems.foreach(index => {
+      separators.insert(
+        index - 1,
+        separators(index - 1)
+      )
+    })
+
     val denseMatrix = new SparseMatrix(
       numRows = numberUsers.toInt,
-      numCols = numberItems.toInt,
-      colPtrs = 0 +: colSeparators.value.toArray,
+      numCols = numberItems,
+      colPtrs = separators.toArray,
       rowIndices = rowIndices.value.toArray,
       values = values.value.toArray
     ).toDense
@@ -112,9 +132,8 @@ class UserBased(session: SparkSession) {
   }
 
   def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
-    val topKUsers = this.getKSimilarUsers(targetUser, 5, item)
-    val ratedItems = targetUser.filter(_ > 0)
-    val ratingMean = ratedItems.sum / ratedItems.length
+    val topKUsers = this.getKSimilarUsers(targetUser, 25, item)
+    val ratingMean = targetUser.sum / targetUser.length
 
     this.ratingCalculation(topKUsers, ratingMean, item)
   }

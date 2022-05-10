@@ -1,6 +1,5 @@
 import item_based.ItemBased
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.ml.linalg.Vectors
 import similarity.{CosineSimilarity, EuclideanSimilarity, PearsonSimilarity}
 import user_based.UserBased
 
@@ -8,47 +7,25 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master("local[*]").appName("TFM").getOrCreate()
 
-/*
     val recSysItemBased = new ItemBased(spark)
-    recSysItemBased.readDataset("train.csv")
+    recSysItemBased.readDataset("train.csv", 1682)
     recSysItemBased.calculateDenseMatrix()
     recSysItemBased.setSimilarityMeasure(new PearsonSimilarity)
 
-    val targetItem = recSysItemBased.itemUserMatrix.rowIter.slice(259, 260).toList.head.toArray
+    val targetItem = recSysItemBased.itemUserMatrix.rowIter.slice(367, 368).toList.head.toArray
 
-    println(recSysItemBased.predictionRatingItem(targetItem, 0))
-*/
-    try {
-      val recSysUserBased = new UserBased(spark)
+    println(recSysItemBased.predictionRatingItem(targetItem, 4))
 
-      recSysUserBased.readDataset("train.csv")
-      recSysUserBased.calculateDenseMatrix()
-      recSysUserBased.setSimilarityMeasure(new EuclideanSimilarity)
+    val recSysUserBased = new UserBased(spark)
 
-      val newUser = recSysUserBased.userItemMatrix.rowIter.slice(0, 1).toList.head.toArray
+    recSysUserBased.readDataset("train.csv", 1682)
+    recSysUserBased.calculateDenseMatrix()
+    recSysUserBased.setSimilarityMeasure(new PearsonSimilarity)
 
-      println(recSysUserBased.predictionRatingItem(newUser, 1))
-    } catch {
-        case _: Throwable => {
-          println("cierro")
-          spark.stop()
-        }
-    }
-/*
-    val indices = newUser.zipWithIndex.filter(_._1 > 0).map(_._2)
+    val newUser = recSysUserBased.userItemMatrix.rowIter.slice(4, 5).toList.head.toArray
 
-    val frequenciesItems = topKUsers.reduce((a, b) => {
-      a.zip(b).map {case (c, d) => (if (c > 0) 1 else 0) + (if (d > 0) 1 else 0)}
-    })
+    println(recSysUserBased.predictionRatingItem(newUser, 368))
 
-    indices.foreach(
-      frequenciesItems(_) = 0.0
-    )
-
-    val topNItems = frequenciesItems.zipWithIndex.filter(_._1 > 0).sortWith(_._1 > _._1).take(5).map(_._2)
-
-    topNItems.map(_ + 1).foreach(println(_))
-*/
     spark.stop()
   }
 }
