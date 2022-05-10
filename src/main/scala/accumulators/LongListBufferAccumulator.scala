@@ -4,14 +4,14 @@ import org.apache.spark.util.AccumulatorV2
 
 import scala.collection.mutable.ListBuffer
 
-class IntListBufferAccumulator extends AccumulatorV2[Int, ListBuffer[Int]] {
-  private val accumulator = ListBuffer[Int]()
+class LongListBufferAccumulator extends AccumulatorV2[Long, ListBuffer[Long]] {
+  private val accumulator = ListBuffer[Long]()
 
-  def add(element: Int): Unit = {
+  def add(element: Long): Unit = {
     this.accumulator += element
   }
 
-  def copy(): IntListBufferAccumulator = {
+  def copy(): LongListBufferAccumulator = {
     this
   }
 
@@ -19,7 +19,7 @@ class IntListBufferAccumulator extends AccumulatorV2[Int, ListBuffer[Int]] {
     this.accumulator.isEmpty
   }
 
-  def merge(other: AccumulatorV2[Int, ListBuffer[Int]]): Unit = {
+  def merge(other: AccumulatorV2[Long, ListBuffer[Long]]): Unit = {
     this.accumulator.addAll(other.value)
   }
 
@@ -27,7 +27,7 @@ class IntListBufferAccumulator extends AccumulatorV2[Int, ListBuffer[Int]] {
     this.accumulator.clear()
   }
 
-  def value: ListBuffer[Int] = {
+  def value: ListBuffer[Long] = {
     this.accumulator
   }
 }
