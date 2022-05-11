@@ -9,15 +9,15 @@ import recommender.BaseRecommender
 
 
 class ItemBasedRatingRecommender(session: SparkSession) extends BaseRecommender(session, isUserBased = false){
-  protected var _kItems: Int = -1
+  protected var _kSimilarItems: Int = -1
 
-  def this(session: SparkSession, kItems: Int) = {
+  def this(session: SparkSession, kSimilarItems: Int) = {
     this(session)
-    this.setKItems(kItems)
+    this.setNumberSimilarItems(kSimilarItems)
   }
 
-  def setKItems(k: Int): Unit = {
-    this._kItems = k
+  def setNumberSimilarItems(k: Int): Unit = {
+    this._kSimilarItems = k
   }
 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
@@ -27,7 +27,7 @@ class ItemBasedRatingRecommender(session: SparkSession) extends BaseRecommender(
       f => this._similarity.getSimilarity(targetItem, f.toArray)
     )
 
-    correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kItems)
+    correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
   protected def ratingCalculation(topKItems: List[(Double, Vector)], user: Int): Double = {

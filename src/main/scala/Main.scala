@@ -2,6 +2,7 @@ import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructFiel
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 import recommender.user_based.UserBasedTopKRecommender
+import recommender.item_based.ItemBasedTopKRecommender
 import similarity._
 
 object Main {
@@ -43,6 +44,7 @@ object Main {
 
     println(recSysUserBased.predictionRatingItem(newUser, 412))
 */
+/*
     val recSysUserBasedTopK = new UserBasedTopKRecommender(spark, 25, 11)
 
     recSysUserBasedTopK.readDataframe(dataframe, 1682)
@@ -51,6 +53,16 @@ object Main {
     val newUser = recSysUserBasedTopK._matrix.rowIter.slice(4, 5).toList.head.toArray
 
     println(recSysUserBasedTopK.topKItemsForUser(newUser))
+*/
+
+    val recSysItemBasedTopK = new ItemBasedTopKRecommender(spark, 25, 11)
+
+    recSysItemBasedTopK.readDataframe(dataframe, 1682)
+    recSysItemBasedTopK.setSimilarityMeasure(new CosineSimilarity)
+
+    val newUserB = recSysItemBasedTopK._matrix.rowIter.slice(4, 5).toList.head.toArray
+
+    println(recSysItemBasedTopK.topKItemsForUser(newUserB, 5))
 
     spark.stop()
   }
