@@ -2,7 +2,7 @@ package similarity
 
 import scala.math.{pow, sqrt}
 
-class EuclideanSimilarity extends Similarity {
+class EuclideanSimilarity extends BaseSimilarity {
   def getSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
     // sum one to the denominator in order to avoid division by zero
 

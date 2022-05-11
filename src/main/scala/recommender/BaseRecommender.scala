@@ -1,4 +1,4 @@
-package recommenders
+package recommender
 
 import scala.collection.mutable.ListBuffer
 
@@ -6,22 +6,23 @@ import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list}
 
-import accumulators.{DoubleListBufferAccumulator, LongListBufferAccumulator}
-import similarity.Similarity
+import accumulator.ListBufferAccumulator
+import similarity.BaseSimilarity
 
 
-class BaseRecommender(session: SparkSession) {
-  var spark: SparkSession = session
-  var matrix: DenseMatrix = null
-  var similarity: Similarity = null
+class BaseRecommender(session: SparkSession, isUserBased: Boolean = true) {
+  var _spark: SparkSession = session
+  var _isUserBased: Boolean = isUserBased
+  var _matrix: DenseMatrix = null
+  var _similarity: BaseSimilarity = null
 
-  def setSimilarityMeasure(similarityMeasure: Similarity): Unit = {
-    this.similarity = similarityMeasure
+  def setSimilarityMeasure(similarityMeasure: BaseSimilarity): Unit = {
+    this._similarity = similarityMeasure
   }
 
   def readDataframe(dataframe: DataFrame, numberOfItems: Long): Unit = {
     val numberOfUsers = this.getNumberOfUsers(dataframe)
-    this.matrix = this.calculateDenseMatrix(dataframe, numberOfUsers, numberOfItems)
+    this._matrix = this.calculateDenseMatrix(dataframe, numberOfUsers, numberOfItems)
   }
 
   protected def getNumberOfUsers(dataframe: DataFrame): Long = {
@@ -37,14 +38,14 @@ class BaseRecommender(session: SparkSession) {
     everyItem -- actualItems
   }
 
-  protected def createAndRegisterAccumulators: (LongListBufferAccumulator, LongListBufferAccumulator, DoubleListBufferAccumulator) = {
-    val rowIndices = new LongListBufferAccumulator
-    val colSeparators = new LongListBufferAccumulator
-    val values = new DoubleListBufferAccumulator
+  protected def createAndRegisterAccumulators: (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
+    val rowIndices = new ListBufferAccumulator[Long]
+    val colSeparators = new ListBufferAccumulator[Long]
+    val values = new ListBufferAccumulator[Double]
 
-    this.spark.sparkContext.register(rowIndices, "ratings")
-    this.spark.sparkContext.register(colSeparators, "col_separator")
-    this.spark.sparkContext.register(values, "row_indices")
+    this._spark.sparkContext.register(rowIndices, "ratings")
+    this._spark.sparkContext.register(colSeparators, "col_separator")
+    this._spark.sparkContext.register(values, "row_indices")
 
     (rowIndices, colSeparators, values)
   }
@@ -89,6 +90,10 @@ class BaseRecommender(session: SparkSession) {
       values = values.value.toArray
     )
 
-    sparse.toDense
+    if (this._isUserBased) {
+      sparse.toDense
+    } else {
+      sparse.transpose.toDense
+    }
   }
 }
