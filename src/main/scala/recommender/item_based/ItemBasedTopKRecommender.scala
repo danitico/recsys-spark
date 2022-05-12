@@ -44,21 +44,18 @@ class ItemBasedTopKRecommender(session: SparkSession) extends BaseRecommender(se
 
     numerator/denominator
   }
-  //java.lang.IllegalArgumentException: Comparison method violates its general contract!
-/*
+
   def topKItemsForUser(targetUser: Array[Double], user: Int): List[(Int, Double)] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
-
-    this._matrix.rowIter.zipWithIndex.filter((f: (Vector, Int)) => {
+    val itemsRatings = this._matrix.rowIter.zipWithIndex.filter(f => {
       unratedItems.contains(f._2)
-    }).map((g: (Vector, Int)) => {
+    }).toList
+
+    itemsRatings.map(g => {
       val similarItems = this.getKSimilarItems(g._1.toArray, user - 1)
       val rating = this.ratingCalculation(similarItems, user - 1)
 
       (g._2 + 1, rating)
-    }).toArray.sortWith((a: (Int, Double), b: (Int, Double)) => {
-      a._2 >= b._2
-    }).take(this._kRecommendedItems).toList
+    }).toArray.sortBy(- _._2).take(this._kRecommendedItems).toList
   }
-*/
 }
