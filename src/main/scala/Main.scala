@@ -1,14 +1,16 @@
+import scala.math.{pow, sqrt}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-
-import recommender.user_based.UserBasedTopKRecommender
+import org.apache.spark.sql.functions.{col, collect_list}
+import accumulator.ListBufferAccumulator
+import recommender.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.item_based.ItemBasedTopKRecommender
 import similarity._
 
 object Main {
   def dataset(session: SparkSession, filename: String): DataFrame = {
     session.read.options(
-      Map("header" -> "true")
+      Map("header" -> "false", "delimiter" -> "\t")
     ).schema(
       StructType(
         Seq(
@@ -24,45 +26,74 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master("local[*]").appName("TFM").getOrCreate()
 
-    val dataframe = dataset(spark, "train.csv")
-
-//    val recSysItemBased = new ItemBased(spark)
-//    recSysItemBased.readDataframe(dataframe, 1682)
-//    recSysItemBased.setSimilarityMeasure(new PearsonSimilarity)
-//
-//    val targetItem = recSysItemBased.matrix.rowIter.slice(411, 412).toList.head.toArray
-//
-//    println(recSysItemBased.predictionRatingItem(targetItem, 5))
-
 /*
-    val recSysUserBased = new UserBased(spark)
+    val recSysItemBased = new ItemBased(spark)
+    recSysItemBased.readDataframe(dataframe, 1682)
+    recSysItemBased.setSimilarityMeasure(new PearsonSimilarity)
 
-    recSysUserBased.readDataframe(dataframe, 1682)
+    val targetItem = recSysItemBased.matrix.rowIter.slice(411, 412).toList.head.toArray
+
+    println(recSysItemBased.predictionRatingItem(targetItem, 5))
+*/
+
+    val recSysUserBased = new UserBasedRatingRecommender(25)
     recSysUserBased.setSimilarityMeasure(new PearsonSimilarity)
+    val train = dataset(spark, "train-fold" + 5 + ".csv")
+    recSysUserBased.readDataframe(spark, train, 1682)
 
-    val newUser = recSysUserBased.matrix.rowIter.slice(4, 5).toList.head.toArray
-
-    println(recSysUserBased.predictionRatingItem(newUser, 412))
-*/
 /*
-    val recSysUserBasedTopK = new UserBasedTopKRecommender(spark, 25, 11)
+    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
-    recSysUserBasedTopK.readDataframe(dataframe, 1682)
-    recSysUserBasedTopK.setSimilarityMeasure(new CosineSimilarity)
+    val crossValidationResults = Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset(spark, "train-fold" + index + ".csv")
+      val test = dataset(spark, "test-fold" + index + ".csv")
 
-    val newUser = recSysUserBasedTopK._matrix.rowIter.slice(4, 5).toList.head.toArray
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
 
-    println(recSysUserBasedTopK.topKItemsForUser(newUser))
+      recSysUserBased.readDataframe(spark, train, 1682)
+
+      test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
+      ).foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val user = recSysUserBased._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
+        items.zip(ratings).foreach(a => {
+          val prediction = recSysUserBased.predictionRatingItem(
+            user, a._1.asInstanceOf[Int]
+          )
+
+          val difference = prediction - a._2.asInstanceOf[Double]
+          accumulator.add(difference)
+        }: Unit)
+      }: Unit)
+
+      val rmse = sqrt(accumulator.value.map(pow(_, 2)).sum / accumulator.value.length)
+      println(rmse)
+      rmse
+    })
+
+    crossValidationResults.foreach(println(_))
 */
-
-    val recSysItemBasedTopK = new ItemBasedTopKRecommender(spark, 25, 11)
-
-    recSysItemBasedTopK.readDataframe(dataframe, 1682)
-    recSysItemBasedTopK.setSimilarityMeasure(new CosineSimilarity)
-
-    val newUserB = recSysItemBasedTopK._matrix.rowIter.slice(4, 5).toList.head.toArray
-
-    println(recSysItemBasedTopK.topKItemsForUser(newUserB, 5))
 
     spark.stop()
   }

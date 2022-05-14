@@ -1,21 +1,14 @@
 package recommender.item_based
 
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.SparkSession
 import recommender.BaseRecommender
 
 import scala.math.abs
 
 
-class ItemBasedTopKRecommender(session: SparkSession) extends BaseRecommender(session, isUserBased = false){
-  protected var _kSimilarItems: Int = -1
-  protected var _kRecommendedItems: Int = -1
-
-  def this(session: SparkSession, kSimilarItems: Int, kRecommendedItems: Int) = {
-    this(session)
-    this.setNumberSimilarItems(kSimilarItems)
-    this.setKRecommendedItems(kRecommendedItems)
-  }
+class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends BaseRecommender(isUserBased = false){
+  protected var _kSimilarItems: Int = kSimilarItems
+  protected var _kRecommendedItems: Int = kRecommendedItems
 
   def setNumberSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k

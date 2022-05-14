@@ -1,18 +1,12 @@
 package recommender.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.SparkSession
+
 import recommender.BaseRecommender
 
-class UserBasedTopKRecommender(session: SparkSession) extends BaseRecommender(session){
-  protected var _kUsers: Int = -1
-  protected var _kItems: Int = -1
-
-  def this(session: SparkSession, kUsers: Int, kItems: Int) = {
-    this(session)
-    this.setKUsers(kUsers)
-    this.setKItems(kItems)
-  }
+class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender{
+  protected var _kUsers: Int = kUsers
+  protected var _kItems: Int = kItems
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k

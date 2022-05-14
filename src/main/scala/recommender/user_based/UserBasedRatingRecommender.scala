@@ -1,18 +1,12 @@
 package recommender.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.sql.SparkSession
 
 import recommender.BaseRecommender
 
 
-class UserBasedRatingRecommender(session: SparkSession) extends BaseRecommender(session) {
-  protected var _kUsers: Int = -1
-
-  def this(session: SparkSession, kUsers: Int) = {
-    this(session)
-    this.setKUsers(kUsers)
-  }
+class UserBasedRatingRecommender(kUsers: Int) extends BaseRecommender {
+  protected var _kUsers: Int = kUsers
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k
@@ -20,6 +14,11 @@ class UserBasedRatingRecommender(session: SparkSession) extends BaseRecommender(
 
   protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
     val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
+
+    if (usersWithRating.isEmpty) {
+      return List()
+    }
+
     val meanRatingUsers = usersWithRating.map(f => {
       val ratedItems = f.toArray.filter(_ > 0)
 
@@ -50,6 +49,10 @@ class UserBasedRatingRecommender(session: SparkSession) extends BaseRecommender(
     val ratingMean = ratedItems.sum / ratedItems.length
 
     val topKUsers = this.getKSimilarUsers(targetUser, item - 1)
+
+    if (topKUsers.isEmpty) {
+      return 0.0
+    }
 
     this.ratingCalculation(topKUsers, ratingMean, item - 1)
   }
