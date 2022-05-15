@@ -17,9 +17,17 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isU
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
     val itemsWithRating = this._matrix.rowIter.filter(_(user) > 0).toList
 
+    if (itemsWithRating.isEmpty) {
+      return List()
+    }
+
     val correlations = itemsWithRating.map(
       f => this._similarity.getSimilarity(targetItem, f.toArray)
     )
+
+    if (correlations.forall(_.isNaN)) {
+      return List()
+    }
 
     correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
@@ -36,6 +44,10 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isU
 
   def predictionRatingItem(targetItem: Array[Double], user: Int): Double = {
     val topKItems = this.getKSimilarItems(targetItem, user - 1)
+
+    if (topKItems.isEmpty) {
+      return 0.0
+    }
 
     this.ratingCalculation(topKItems, user - 1)
   }
