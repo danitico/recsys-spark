@@ -29,14 +29,12 @@ class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
   }
 
   protected def getNotRepresentedItems(groupedDf: DataFrame, cols: Long): Seq[Long] = {
-    println(cols)
-    // need to check this. it is removing one of the items
-    val everyItem = Set.range(1, cols)
+    val everyItem = Set.range(1, cols + 1)
     val actualItems = groupedDf.select(
       "item_id"
     ).collect().map(_.getInt(0).toLong).toSet
 
-    (everyItem -- actualItems).toSeq.sorted
+    everyItem.diff(actualItems).toSeq.sorted
   }
 
   protected def createAndRegisterAccumulators(session: SparkSession): (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
@@ -60,7 +58,6 @@ class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
     ).drop("user_id", "rating")
 
     val notRepresentedItems = this.getNotRepresentedItems(groupedDf, cols)
-    println(notRepresentedItems)
     val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators(session)
 
     groupedDf.foreach((row: Row) => {

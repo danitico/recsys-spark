@@ -38,10 +38,7 @@ object Main {
 
     val recSysUserBased = new UserBasedRatingRecommender(25)
     recSysUserBased.setSimilarityMeasure(new PearsonSimilarity)
-    val train = dataset(spark, "train-fold" + 5 + ".csv")
-    recSysUserBased.readDataframe(spark, train, 1682)
 
-/*
     val predictions_accumulator1 = new ListBufferAccumulator[Double]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
     val predictions_accumulator2 = new ListBufferAccumulator[Double]
@@ -93,7 +90,6 @@ object Main {
     })
 
     crossValidationResults.foreach(println(_))
-*/
 
     spark.stop()
   }
