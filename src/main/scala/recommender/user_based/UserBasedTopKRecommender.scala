@@ -19,6 +19,10 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
   protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector)] = {
     val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
 
+    if (usersWithRating.isEmpty) {
+      return List()
+    }
+
     val correlations = usersWithRating.map(
       f => this._similarity.getSimilarity(targetUser, f.toArray)
     )
@@ -32,11 +36,15 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
     unratedItems.map(item => {
       val similarUsers = this.getKSimilarUsers(targetUser, item)
 
-      val score = similarUsers.map(a => {
-        a._1 * a._2(item)
-      }).sum
+      if (similarUsers.isEmpty) {
+        (item + 1, 0.0)
+      } else {
+        val score = similarUsers.map(a => {
+          a._1 * a._2(item)
+        }).sum
 
-      (item + 1, score)
+        (item + 1, score)
+      }
     }).sortWith(_._2 > _._2).take(this._kItems).toList
   }
 }

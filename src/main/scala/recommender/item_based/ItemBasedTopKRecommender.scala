@@ -21,9 +21,17 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
     val itemsWithRating = this._matrix.rowIter.filter(_(user) > 0).toList
 
+    if (itemsWithRating.isEmpty) {
+      return List()
+    }
+
     val correlations = itemsWithRating.map(
       f => this._similarity.getSimilarity(targetItem, f.toArray)
     )
+
+    if (correlations.forall(_.isNaN)) {
+      return List()
+    }
 
     correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
@@ -46,9 +54,14 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
 
     itemsRatings.map(g => {
       val similarItems = this.getKSimilarItems(g._1.toArray, user - 1)
-      val rating = this.ratingCalculation(similarItems, user - 1)
 
-      (g._2 + 1, rating)
+      if (similarItems.isEmpty) {
+        (g._2 + 1, 0.0)
+      } else {
+        val rating = this.ratingCalculation(similarItems, user - 1)
+
+        (g._2 + 1, rating)
+      }
     }).toArray.sortBy(- _._2).take(this._kRecommendedItems).toList
   }
 }

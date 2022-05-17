@@ -42,8 +42,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "train-fold" + index + ".csv")
-      val test = dataset(spark, "test-fold" + index + ".csv")
+      val train = dataset(spark, "data/train-fold" + index + ".csv")
+      val test = dataset(spark, "data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -95,8 +95,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "train-fold" + index + ".csv")
-      val test = dataset(spark, "test-fold" + index + ".csv")
+      val train = dataset(spark, "data/train-fold" + index + ".csv")
+      val test = dataset(spark, "data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
