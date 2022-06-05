@@ -1,13 +1,12 @@
-package recommender
+package recommender.collaborative
 
-import scala.collection.mutable.ListBuffer
-import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
-import org.apache.spark.sql.functions.{col, collect_list}
 import accumulator.ListBufferAccumulator
+import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
+import org.apache.spark.sql.functions.{col, collect_list}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import similarity.BaseSimilarity
 
-import scala.collection.SortedSet
+import scala.collection.mutable.ListBuffer
 
 
 class BaseRecommender(isUserBased: Boolean = true) extends Serializable {

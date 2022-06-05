@@ -1,8 +1,7 @@
-package recommender.user_based
+package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
-
-import recommender.BaseRecommender
+import recommender.collaborative.BaseRecommender
 
 class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender{
   protected var _kUsers: Int = kUsers
@@ -30,7 +29,7 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
     correlations.zip(usersWithRating).sortWith(_._1 > _._1).take(this._kUsers)
   }
 
-  def topKItemsForUser(targetUser: Array[Double]): List[(Int, Double)] = {
+  def topKItemsForUser(targetUser: Array[Double]): Set[Int] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
 
     unratedItems.map(item => {
@@ -45,6 +44,6 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
 
         (item + 1, score)
       }
-    }).sortWith(_._2 > _._2).take(this._kItems).toList
+    }).sortWith(_._2 > _._2).take(this._kItems).map(_._1).toSet
   }
 }

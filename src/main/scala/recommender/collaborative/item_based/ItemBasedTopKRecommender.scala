@@ -1,7 +1,7 @@
-package recommender.item_based
+package recommender.collaborative.item_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.BaseRecommender
+import recommender.collaborative.BaseRecommender
 
 import scala.math.abs
 

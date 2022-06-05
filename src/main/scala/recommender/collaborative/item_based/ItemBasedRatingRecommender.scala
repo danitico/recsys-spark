@@ -1,10 +1,8 @@
-package recommender.item_based
+package recommender.collaborative.item_based
 
 import scala.math.abs
-
 import org.apache.spark.ml.linalg.Vector
-
-import recommender.BaseRecommender
+import recommender.collaborative.BaseRecommender
 
 
 class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isUserBased = false){

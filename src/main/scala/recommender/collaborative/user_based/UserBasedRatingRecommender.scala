@@ -1,8 +1,7 @@
-package recommender.user_based
+package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
-
-import recommender.BaseRecommender
+import recommender.collaborative.BaseRecommender
 
 
 class UserBasedRatingRecommender(kUsers: Int) extends BaseRecommender {
