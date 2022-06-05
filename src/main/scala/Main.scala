@@ -169,7 +169,7 @@ object Main {
   }
 
   def contentCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
-    val recSys = new ContentBasedRatingRecommender(5)
+    val recSys = new ContentBasedRatingRecommender(k)
     recSys.setSimilarityMeasure(similarity)
 
     val features = spark.read.options(
@@ -232,7 +232,7 @@ object Main {
     val spark = SparkSession.builder().master("local[*]").appName("TFM").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
-    val crossValidationResults = contentCrossValidation(spark, new CosineSimilarity, 25)
+    val crossValidationResults = contentCrossValidation(spark, new JaccardSimilarity, 25)
 
     crossValidationResults.zipWithIndex.foreach(f => {
       println("Fold " + (f._2 + 1) + ": " + f._1)
