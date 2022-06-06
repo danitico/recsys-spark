@@ -1,6 +1,8 @@
 package recommender.content
 
 import org.apache.spark.ml.linalg.SparseVector
+import similarity.EuclideanSimilarity
+
 import scala.math.abs
 
 
@@ -9,6 +11,16 @@ class ContentBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender 
 
   def setNumberSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k
+  }
+
+  def solveSimilarity(targetItem: Array[Double], otherItem: Array[Double]): Double = {
+    val similarity = this._similarity.getSimilarity(targetItem, otherItem)
+
+    if (similarity == 0.0) {
+      new EuclideanSimilarity().getSimilarity(targetItem, otherItem)
+    } else {
+      similarity
+    }
   }
 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Double)] = {
@@ -22,7 +34,7 @@ class ContentBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender 
 
     val correlations = itemsWithRating.map(tuple => {
       val itemFeature = this._features.filter(_.getInt(0) == tuple._2).head.getAs[SparseVector](1)
-      this._similarity.getSimilarity(targetItem, itemFeature.toDense.toArray)
+      this.solveSimilarity(targetItem, itemFeature.toDense.toArray)
     })
 
     if (correlations.forall(_.isNaN)) {
