@@ -1,7 +1,6 @@
 package recommender.content
 
 import scala.collection.mutable.ListBuffer
-import scala.collection.immutable.ArraySeq.unsafeWrapArray
 
 import org.apache.spark.ml.feature.VectorAssembler
 import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
@@ -41,7 +40,7 @@ class BaseRecommender extends Serializable {
     val transformed = assembler.transform(
       features
     ).drop(
-      unsafeWrapArray(columnsToTransform):_*
+      columnsToTransform:_*
     )
 
     transformed.collect()
@@ -51,11 +50,11 @@ class BaseRecommender extends Serializable {
     dataframe.select("user_id").distinct().count()
   }
 
-  protected def getNotRepresentedItems(groupedDf: DataFrame, cols: Long): Seq[Long] = {
-    val everyItem = Set.range(1, cols + 1)
+  protected def getNotRepresentedItems(groupedDf: DataFrame, cols: Long): Seq[Int] = {
+    val everyItem = Range.inclusive(1, cols.toInt).toSet
     val actualItems = groupedDf.select(
       "item_id"
-    ).collect().map(_.getInt(0).toLong).toSet
+    ).collect().map(_.getInt(0)).toSet
 
     everyItem.diff(actualItems).toSeq.sorted
   }
@@ -95,12 +94,12 @@ class BaseRecommender extends Serializable {
       colSeparators.add(values.value.length)
     })
 
-    val separators: ListBuffer[Long] = 0 +: colSeparators.value
+    val separators: ListBuffer[Long] = 0.toLong +: colSeparators.value
 
     notRepresentedItems.foreach(index => {
       separators.insert(
-        index.toInt - 1,
-        separators(index.toInt - 1)
+        index - 1,
+        separators(index - 1)
       )
     })
 

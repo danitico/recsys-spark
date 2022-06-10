@@ -20,7 +20,7 @@ class ListBufferAccumulator[A] extends AccumulatorV2[A, ListBuffer[A]] {
   }
 
   def merge(other: AccumulatorV2[A, ListBuffer[A]]): Unit = {
-    this.accumulator.addAll(other.value)
+    this.accumulator ++= other.value
   }
 
   def reset(): Unit = {
