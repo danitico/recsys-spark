@@ -1,7 +1,7 @@
 import scala.math.{pow, sqrt}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{col, collect_list, udf}
+import org.apache.spark.sql.functions.{col, collect_list, from_unixtime, udf}
 import accumulator.ListBufferAccumulator
 import metrics.TopKMetrics
 import org.apache.spark.ml.linalg.SparseVector
@@ -26,7 +26,7 @@ object Main {
           StructField("timestamp", LongType, nullable = false)
         )
       )
-    ).csv(filename)
+    ).csv(filename).withColumn("timestamp", from_unixtime(col("timestamp")))
   }
 
   def userBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
@@ -254,6 +254,8 @@ object Main {
       "local[*]"
     ).config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
+    ).config(
+      "spark.jars", "/home/daniel/Desktop/recommendations/lib/sparkml-som_2.12-0.2.1.jar"
     ).appName(
       "TFM"
     ).getOrCreate()

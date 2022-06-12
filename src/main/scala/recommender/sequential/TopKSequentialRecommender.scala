@@ -3,11 +3,9 @@ package recommender.sequential
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
 import org.apache.spark.sql.functions.monotonically_increasing_id
-import org.apache.spark.sql.types.{IntegerType, StructType}
-/*import org.apache.spark.ml.clustering.som.SOM*/
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.functions.{col, collect_list, udf}
-import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 import scala.collection.mutable.ListBuffer
 
@@ -19,6 +17,8 @@ class TopKSequentialRecommender extends Serializable {
   private var _userItemDf: DataFrame = null
   private var _transactionDf: DataFrame = null
   private var _kMeansModel: KMeansModel = null
+  private var _transactionGroups: Array[DataFrame] = null
+  private var _transactionsModels: Array[KMeansModel] = null
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
@@ -37,13 +37,10 @@ class TopKSequentialRecommender extends Serializable {
 
   def fit(train: DataFrame): Unit = {
     this._userItemDf = this.getUserItemDf(train)
-    println("termino join")
-    println("empiezo clustering")
     this.clusterCustomers()
-    println("empiezo transaccion")
     this._transactionDf = this.getTransactionDf(train)
-    println("termino transaccion")
     this.clusterTransactions()
+    this.buildPeriods()
   }
 
   private def clusterCustomers(): Unit = {
@@ -60,7 +57,6 @@ class TopKSequentialRecommender extends Serializable {
     this._assignedClusters = this._kMeansModel.transform(
       this._userItemDf
     ).drop("features")
-    println("termino clustering")
   }
 
   private def clusterTransactions(): Unit = {
@@ -71,21 +67,23 @@ class TopKSequentialRecommender extends Serializable {
       "customer_cluster"
     ).collect().map(_.getInt(0))
 
-    val models = clusters.map(cluster_id => {
-      this._transactionDf.where("customer_cluster == " + cluster_id).show()
+    // pruebo con Kmeans hasta resolver lo de SOM
+    val transactionsGroupsAndModels = clusters.map(cluster_id => {
+      val transactionGroup = this._transactionDf.where("customer_cluster == " + cluster_id)
 
-      1.0
+      val model = new KMeans().setK(5).setPredictionCol("transaction_cluster").fit(transactionGroup)
+      val transactionGroupWithPrediction = model.transform(transactionGroup)
+      transactionGroupWithPrediction.show()
+
+      (transactionGroupWithPrediction, model)
     })
 
-/*
-    partitioned.foreachPartition((iterator: Iterator[Row]) => {
-      val meow1 = session.sparkContext.parallelize(iterator.toSeq)
-      session.createDataFrame(
-        meow1,
-        this._transactionDf.schema
-      ).show()
-    }: Unit)
-*/
+    this._transactionGroups = transactionsGroupsAndModels.map(_._1)
+    this._transactionsModels = transactionsGroupsAndModels.map(_._2)
+  }
+
+  private def buildPeriods(): Unit = {
+    this._transactionGroups(0).show()
   }
 
   private def getNumberOfUsers(dataframe: DataFrame): Long = {
@@ -172,7 +170,6 @@ class TopKSequentialRecommender extends Serializable {
       "rowId2", monotonically_increasing_id()
     )
 
-    println("empiezo join")
     df.join(ids, df("rowId1") === ids("rowId2"), "inner").drop("rowId1", "rowId2")
   }
 
