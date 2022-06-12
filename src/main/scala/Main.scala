@@ -1,17 +1,20 @@
 import scala.math.{pow, sqrt}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{col, collect_list}
+import org.apache.spark.sql.functions.{col, collect_list, udf}
 import accumulator.ListBufferAccumulator
 import metrics.TopKMetrics
 import org.apache.spark.ml.linalg.SparseVector
 import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.item_based.ItemBasedRatingRecommender
 import recommender.content.ContentBasedRatingRecommender
+import recommender.sequential.TopKSequentialRecommender
 import similarity._
 
 object Main {
-  def dataset(session: SparkSession, filename: String): DataFrame = {
+  def dataset(filename: String): DataFrame = {
+    val session = SparkSession.getActiveSession.orNull
+
     session.read.options(
       Map("header" -> "false", "delimiter" -> "\t")
     ).schema(
@@ -23,7 +26,7 @@ object Main {
           StructField("timestamp", LongType, nullable = false)
         )
       )
-    ).csv(filename).drop("timestamp")
+    ).csv(filename)
   }
 
   def userBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
@@ -43,8 +46,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "data/train-fold" + index + ".csv")
-      val test = dataset(spark, "data/test-fold" + index + ".csv")
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -96,8 +99,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "data/train-fold" + index + ".csv")
-      val test = dataset(spark, "data/test-fold" + index + ".csv")
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -149,8 +152,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "data/train-fold" + index + ".csv")
-      val test = dataset(spark, "data/test-fold" + index + ".csv")
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -208,8 +211,8 @@ object Main {
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset(spark, "data/train-fold" + index + ".csv")
-      val test = dataset(spark, "data/test-fold" + index + ".csv")
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -247,14 +250,22 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder().master("local[*]").appName("TFM").getOrCreate()
+    val spark = SparkSession.builder().master(
+      "local[*]"
+    ).config(
+      "spark.sql.autoBroadcastJoinThreshold", "-1"
+    ).appName(
+      "TFM"
+    ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
-    val crossValidationResults = userBasedTopKCrossValidation(spark, new CosineSimilarity, 25, 5)
+    val recsys = new TopKSequentialRecommender().setKCustomer(
+      5
+    ).setNumberItems(1682).setKMeansDistance("cosine")
 
-    crossValidationResults.zipWithIndex.foreach(f => {
-      println("Fold " + (f._2 + 1) + ": " + f._1)
-    })
+    val train = dataset("data/train-fold1.csv")
+
+    recsys.fit(train)
 
     spark.stop()
   }
