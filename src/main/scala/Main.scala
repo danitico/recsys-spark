@@ -254,8 +254,6 @@ object Main {
       "local[*]"
     ).config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
-    ).config(
-      "spark.jars", "/home/daniel/Desktop/recommendations/lib/sparkml-som_2.12-0.2.1.jar"
     ).appName(
       "TFM"
     ).getOrCreate()
@@ -263,7 +261,9 @@ object Main {
 
     val recsys = new TopKSequentialRecommender().setKCustomer(
       5
-    ).setNumberItems(1682).setKMeansDistance("cosine")
+    ).setNumberItems(1682).setKMeansDistance("cosine").setPeriod(
+      "30 days"
+    )
 
     val train = dataset("data/train-fold1.csv")
 
