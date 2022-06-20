@@ -2,10 +2,10 @@ package recommender.sequential
 
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
-import org.apache.spark.ml.fpm.PrefixSpan
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, monotonically_increasing_id, struct, udf, window}
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import som.{SOM, SOMModel}
 
 import scala.collection.mutable.ListBuffer
 
@@ -16,13 +16,14 @@ class TopKSequentialRecommender extends Serializable {
   private var _assignedClusters: DataFrame = null
   private var _userItemDf: DataFrame = null
   private var _transactionDf: DataFrame = null
-  private var _kMeansModel: KMeansModel = null
+  private var _customerKmeansModel: KMeansModel = null
   private var _transactionGroups: Array[DataFrame] = null
-  private var _transactionsModels: Array[KMeansModel] = null
+  private var _transactionsModels: Array[SOMModel] = null
   private var _periodRanges: DataFrame = null
   private var _durationPeriod: String = ""
   private var _periods: DataFrame = null
   private var _periodsIds: List[Long] = null
+  private var _numberPeriods: Int = -1
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
@@ -44,8 +45,13 @@ class TopKSequentialRecommender extends Serializable {
     this
   }
 
-  def setPeriod(duration: String): this.type = {
+  def setPeriods(duration: String): this.type = {
     this._durationPeriod = duration
+    this
+  }
+
+  def setPeriods(numberPeriods: Int): this.type = {
+    this._numberPeriods = numberPeriods
     this
   }
 
@@ -59,7 +65,7 @@ class TopKSequentialRecommender extends Serializable {
   }
 
   private def clusterCustomers(): Unit = {
-    this._kMeansModel = new KMeans().setDistanceMeasure(
+    this._customerKmeansModel = new KMeans().setDistanceMeasure(
       this._kMeansDistance
     ).setK(
       this._kCustomers
@@ -69,24 +75,27 @@ class TopKSequentialRecommender extends Serializable {
       "customer_cluster"
     ).setMaxIter(10).fit(this._userItemDf)
 
-    this._assignedClusters = this._kMeansModel.transform(
+    this._assignedClusters = this._customerKmeansModel.transform(
       this._userItemDf
     ).drop("features")
   }
 
   private def clusterTransactions(): Unit = {
     this._transactionDf = this._transactionDf.join(this._assignedClusters, "user_id")
-    val clusters = this._kMeansModel.summary.cluster.select(
+    val clusters = this._assignedClusters.select(
       "customer_cluster"
     ).distinct().orderBy(
       "customer_cluster"
     ).collect().map(_.getInt(0))
 
-    // pruebo con Kmeans hasta resolver lo de SOM
     val transactionsGroupsAndModels = clusters.map(cluster_id => {
       val transactionGroup = this._transactionDf.where("customer_cluster == " + cluster_id)
 
-      val model = new KMeans().setK(5).setPredictionCol("transaction_cluster").fit(transactionGroup)
+      val model = new SOM().setMaxIter(10).setFeaturesCol(
+        "features"
+      ).setPredictionCol(
+        "transaction_cluster"
+      ).fit(transactionGroup)
       val transactionGroupWithPrediction = model.transform(transactionGroup)
 
       (transactionGroupWithPrediction, model)
@@ -129,6 +138,53 @@ class TopKSequentialRecommender extends Serializable {
         "end",
         col("period.end")
       ).drop("period")
+    } else if (this._numberPeriods > 0) {
+      val diff = this._transactionDf.agg(
+        min("timestamp").as("start"),
+        max("timestamp").as("end")
+      ).withColumn(
+        "diff", datediff(col("end"), col("start"))
+      ).head().getInt(2)
+
+      this._transactionDf = this._transactionDf.withColumn(
+        "period",
+        window(col("timestamp"), (diff.toDouble / this._numberPeriods.toDouble).toInt.toString + " days")
+      )
+
+      this._periods = this._transactionDf.select(
+        "period"
+      ).distinct().orderBy("period")
+
+      val periodsGenerated = _periods.count()
+      println(periodsGenerated)
+
+      this._periods = this._periods.withColumn(
+        "period_id",
+        monotonically_increasing_id()
+      )
+
+      this._periods = this._periods.withColumn(
+        "period_id",
+        when(
+          col("period_id") === periodsGenerated - 1, periodsGenerated - 2
+        ).otherwise(col("period_id"))
+      )
+
+      this._periodsIds = this._periods.select("period_id").distinct().orderBy("period_id").collect().map(
+        _.getLong(0)
+      ).toList
+
+      this._transactionDf = this._transactionDf.join(
+        this._periods, this._transactionDf("period") === this._periods("period"), "inner"
+      ).drop("period")
+
+      this._periods = this._periods.withColumn(
+        "start",
+        col("period.start")
+      ).withColumn(
+        "end",
+        col("period.end")
+      ).drop("period")
     }
   }
 
@@ -142,12 +198,12 @@ class TopKSequentialRecommender extends Serializable {
         if(generated.exists(_._1 == id)) {
           generated.find(_._1 == id).orNull
         } else {
-          (id, Seq(-1))
+          (id, Seq())
         }
       }).sortWith(_._1 < _._1).map(_._2)
     })
 
-    val meow = this._transactionGroups(2).groupBy("user_id", "period_id").agg(
+    val meow = this._transactionGroups(1).groupBy("user_id", "period_id").agg(
       collect_set(col("transaction_cluster")).as("transaction_clusters")
     ).groupBy("user_id", "period_id").agg(
       collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
@@ -160,11 +216,15 @@ class TopKSequentialRecommender extends Serializable {
       )
     ).drop("tuple_period_cluster_per_user")
 
+    meow.show(false)
+
+/*
     new PrefixSpan().setMinSupport(
       0.2
     ).setMaxPatternLength(
       5
     ).findFrequentSequentialPatterns(meow).show(false)
+*/
   }
 
   private def getNumberOfUsers(dataframe: DataFrame): Long = {
@@ -265,7 +325,7 @@ class TopKSequentialRecommender extends Serializable {
         row.map((element: Int) => {
           (element - 1, 1.0)
         })
-      ).toDense
+      ).toDense.toArray.toList
     })
 
     groupedByUserAndTimeStamp.withColumn(
