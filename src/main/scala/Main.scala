@@ -272,7 +272,7 @@ object Main {
 
     val recsys = new TopKSequentialRecommender().setKCustomer(
       5
-    ).setNumberItems(1682).setKMeansDistance("cosine").setPeriods(3)
+    ).setNumberItems(1682).setKMeansDistance("cosine").setPeriods("90 days")
 
     val train = dataset("data/train-fold1.csv")
 

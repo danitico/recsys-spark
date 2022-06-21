@@ -1,6 +1,7 @@
 package recommender.sequential
 
 import accumulator.ListBufferAccumulator
+import org.apache.spark.ml.fpm.{FPGrowth, PrefixSpan}
 import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
 import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
@@ -92,7 +93,11 @@ class TopKSequentialRecommender extends Serializable {
     val transactionsGroupsAndModels = clusters.map(cluster_id => {
       val transactionGroup = this._transactionDf.where("customer_cluster == " + cluster_id)
 
-      val model = new SOM().setMaxIter(10).setFeaturesCol(
+      val model = new SOM().setMaxIter(10).setHeight(
+        2
+      ).setWidth(
+        2
+      ).setFeaturesCol(
         "features"
       ).setPredictionCol(
         "transaction_cluster"
@@ -229,7 +234,10 @@ class TopKSequentialRecommender extends Serializable {
   private def obtainItemsets(): Unit = {
     val flatList = udf((row: List[List[(Long, List[Int])]]) => {
       val generated = row.map(element => {
-        (element.head._1, element.head._2)
+        (
+          element.head._1,
+          element.head._2.map(_.toString + "_" + element.head._1.toString)
+        )
       })
 
       this._periodsIds.map((id: Long) => {
@@ -238,30 +246,34 @@ class TopKSequentialRecommender extends Serializable {
         } else {
           (id, Seq())
         }
-      }).sortWith(_._1 < _._1).map(_._2)
+      }).sortWith(_._1 < _._1).flatMap(_._2)
     })
 
-    val meow = this._transactionGroups(1).groupBy("user_id", "period_id").agg(
+    val meow = this._transactionGroups(0).groupBy("user_id", "period_id").agg(
       collect_set(col("transaction_cluster")).as("transaction_clusters")
     ).groupBy("user_id", "period_id").agg(
       collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
     ).groupBy("user_id").agg(
       collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
     ).withColumn(
-      "sequence",
+      "items",
       flatList(
         col("tuple_period_cluster_per_user")
       )
     ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
-    meow.show(false)
+    meow.show(200, truncate = false)
 
+    val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.15).setMinConfidence(0.8)
+    val model = fpgrowth.fit(meow)
+
+    println(model.associationRules.count())
 /*
     new PrefixSpan().setMinSupport(
       0.2
     ).setMaxPatternLength(
-      5
-    ).findFrequentSequentialPatterns(meow).show(false)
+      4
+    ).findFrequentSequentialPatterns(meow).show(200,false)
 */
   }
 
