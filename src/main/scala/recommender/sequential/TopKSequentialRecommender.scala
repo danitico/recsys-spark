@@ -6,6 +6,7 @@ import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff,
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import som.{SOM, SOMModel}
+import com.github.nscala_time.time.Imports._
 
 import scala.collection.mutable.ListBuffer
 
@@ -19,7 +20,7 @@ class TopKSequentialRecommender extends Serializable {
   private var _customerKmeansModel: KMeansModel = null
   private var _transactionGroups: Array[DataFrame] = null
   private var _transactionsModels: Array[SOMModel] = null
-  private var _periodRanges: DataFrame = null
+  private var _periodRanges: Seq[(Long, String, String)] = null
   private var _durationPeriod: String = ""
   private var _periods: DataFrame = null
   private var _periodsIds: List[Long] = null
@@ -40,7 +41,7 @@ class TopKSequentialRecommender extends Serializable {
     this
   }
 
-  def setPeriods(periods: DataFrame): this.type = {
+  def setPeriods(periods: Seq[(Long, String, String)]): this.type = {
     this._periodRanges = periods
     this
   }
@@ -73,7 +74,7 @@ class TopKSequentialRecommender extends Serializable {
       "features"
     ).setPredictionCol(
       "customer_cluster"
-    ).setMaxIter(10).fit(this._userItemDf)
+    ).setMaxIter(10).setSeed(42L).fit(this._userItemDf)
 
     this._assignedClusters = this._customerKmeansModel.transform(
       this._userItemDf
@@ -95,7 +96,7 @@ class TopKSequentialRecommender extends Serializable {
         "features"
       ).setPredictionCol(
         "transaction_cluster"
-      ).fit(transactionGroup)
+      ).setSeed(42L).fit(transactionGroup)
       val transactionGroupWithPrediction = model.transform(transactionGroup)
 
       (transactionGroupWithPrediction, model)
@@ -107,7 +108,45 @@ class TopKSequentialRecommender extends Serializable {
 
   private def buildPeriods(): Unit = {
     if (this._periodRanges != null) {
-      println("hola")
+      val timestampToPeriod = udf((timestamp: String) => {
+        val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+        val actualTimestamp = DateTime.parse(timestamp, format)
+        val results = this._periodRanges.map(range => {
+          if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+            range._1
+          } else {
+            -1L
+          }
+        })
+
+        if (results.forall(_ == -1L)) {
+          this._periodRanges.last._1
+        } else {
+          results.filter(_ >= 0L).head
+        }
+      })
+
+      this._transactionDf = this._transactionDf.withColumn(
+        "period_id",
+        timestampToPeriod(col("timestamp"))
+      )
+
+      val session: SparkSession = SparkSession.getActiveSession.orNull
+      import session.implicits._
+
+      this._periods = this._periodRanges.toDF().withColumnRenamed(
+        "_1",
+        "period_id"
+      ).withColumnRenamed(
+        "_2",
+        "start"
+      ).withColumnRenamed(
+        "_3",
+        "end"
+      )
+
+      this._periodsIds = this._periodRanges.map(_._1).toList
+
     } else if (this._durationPeriod.nonEmpty) {
       this._transactionDf = this._transactionDf.withColumn(
         "period",
@@ -156,7 +195,6 @@ class TopKSequentialRecommender extends Serializable {
       ).distinct().orderBy("period")
 
       val periodsGenerated = _periods.count()
-      println(periodsGenerated)
 
       this._periods = this._periods.withColumn(
         "period_id",
@@ -214,7 +252,7 @@ class TopKSequentialRecommender extends Serializable {
       flatList(
         col("tuple_period_cluster_per_user")
       )
-    ).drop("tuple_period_cluster_per_user")
+    ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
     meow.show(false)
 

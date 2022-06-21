@@ -1,7 +1,7 @@
 import scala.math.{pow, sqrt}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{col, collect_list, from_unixtime, udf}
+import org.apache.spark.sql.functions.{col, collect_list, from_unixtime, to_timestamp}
 import accumulator.ListBufferAccumulator
 import metrics.TopKMetrics
 import org.apache.spark.ml.linalg.SparseVector
@@ -26,7 +26,10 @@ object Main {
           StructField("timestamp", LongType, nullable = false)
         )
       )
-    ).csv(filename).withColumn("timestamp", from_unixtime(col("timestamp")))
+    ).csv(filename).withColumn(
+      "timestamp",
+      from_unixtime(col("timestamp"))
+    )
   }
 
   def userBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
@@ -260,6 +263,12 @@ object Main {
       "TFM"
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+
+    val timePeriods = Seq(
+      (0L, "1997-08-09 02:00:00", "1997-10-19 02:00:00"),
+      (1L, "1997-10-19 02:00:00", "1997-12-29 01:00:00"),
+      (2L, "1997-12-29 01:00:00", "1998-05-20 02:00:00")
+    )
 
     val recsys = new TopKSequentialRecommender().setKCustomer(
       5
