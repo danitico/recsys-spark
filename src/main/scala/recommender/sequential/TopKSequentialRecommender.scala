@@ -26,6 +26,7 @@ class TopKSequentialRecommender extends Serializable {
   private var _periods: DataFrame = null
   private var _periodsIds: List[Long] = null
   private var _numberPeriods: Int = -1
+  private var _rules: Array[DataFrame] = null
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
@@ -63,7 +64,13 @@ class TopKSequentialRecommender extends Serializable {
     this._transactionDf = this.getTransactionDf(train)
     this.buildPeriods()
     this.clusterTransactions()
-    this.obtainItemsets()
+    this.obtainRules()
+    println(this._rules.length)
+    this._rules(0).show()
+    this._rules(1).show()
+    this._rules(2).show()
+    this._rules(3).show()
+    this._rules(4).show()
   }
 
   private def clusterCustomers(): Unit = {
@@ -231,12 +238,20 @@ class TopKSequentialRecommender extends Serializable {
     }
   }
 
-  private def obtainItemsets(): Unit = {
+  private def obtainRules(): Unit = {
+    val clusters = this._assignedClusters.select(
+      "customer_cluster"
+    ).distinct().orderBy(
+      "customer_cluster"
+    ).collect().map(_.getInt(0))
+
     val flatList = udf((row: List[List[(Long, List[Int])]]) => {
       val generated = row.map(element => {
         (
           element.head._1,
-          element.head._2.map(_.toString + "_" + element.head._1.toString)
+          element.head._2.map(
+            _.toString + "_" + (element.head._1 - this._periodsIds.length + 1).toString
+          )
         )
       })
 
@@ -249,32 +264,78 @@ class TopKSequentialRecommender extends Serializable {
       }).sortWith(_._1 < _._1).flatMap(_._2)
     })
 
-    val meow = this._transactionGroups(0).groupBy("user_id", "period_id").agg(
-      collect_set(col("transaction_cluster")).as("transaction_clusters")
-    ).groupBy("user_id", "period_id").agg(
-      collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
-    ).groupBy("user_id").agg(
-      collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
-    ).withColumn(
-      "items",
-      flatList(
-        col("tuple_period_cluster_per_user")
-      )
-    ).drop("tuple_period_cluster_per_user").orderBy("user_id")
+    // udf to filter rules which consequent does not have an item from the period 0
+    val filterAntecedent = udf((row: Array[String]) => {
+      row.filter(!_.endsWith("_0"))
+    })
 
-    meow.show(200, truncate = false)
+    // udf to get X union Y from X -> Y
+    val getXY = udf((column1: List[String], column2: List[String]) => {
+      column1 ++ column2
+    })
 
-    val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.15).setMinConfidence(0.8)
-    val model = fpgrowth.fit(meow)
+    this._rules = clusters.map(cluster => {
+      val transactions = this._transactionGroups(cluster).groupBy("user_id", "period_id").agg(
+        collect_set(col("transaction_cluster")).as("transaction_clusters")
+      ).groupBy("user_id", "period_id").agg(
+        collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
+      ).groupBy("user_id").agg(
+        collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
+      ).withColumn(
+        "items",
+        flatList(
+          col("tuple_period_cluster_per_user")
+        )
+      ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
-    println(model.associationRules.count())
-/*
-    new PrefixSpan().setMinSupport(
-      0.2
-    ).setMaxPatternLength(
-      4
-    ).findFrequentSequentialPatterns(meow).show(200,false)
-*/
+      // train fpgrowth model
+      val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.05).setMinConfidence(0.7)
+      val model = fpgrowth.fit(transactions)
+
+      // Remove from the antecedent those items belonging to period 0
+      // and removing columns of metrics related to rules
+      // because they were extracted from the original rules
+      // After that, distinct rules are obtained
+      val rules = model.associationRules.filter(row => {
+        val consequent = row.getList(1).toArray()
+        consequent.head.asInstanceOf[String].endsWith("_0")
+      }).withColumn(
+        "antecedent",
+        filterAntecedent(col("antecedent"))
+      ).filter(row => row.getList(0).toArray().nonEmpty).drop(
+        "confidence", "lift", "support"
+      ).distinct()
+
+      // Solving support and confidence for the new set of rules
+      val numberOfTransactions = transactions.count()
+      val transactionsArray = transactions.select("items").collect().map(_.getList(0).toArray())
+
+      // udf for support
+      val getSupport = udf((row: List[String]) => {
+        transactionsArray.map(transaction => {
+          if (row.toSet.subsetOf(transaction.map(_.asInstanceOf[String]).toSet)) {
+            1.0
+          } else {
+            0.0
+          }
+        }).sum / numberOfTransactions.toDouble
+      })
+
+      // rules with support and confidence
+      rules.withColumn(
+        "XY",
+        getXY(col("antecedent"), col("consequent"))
+      ).withColumn(
+        "support",
+        getSupport(col("XY"))
+      ).withColumn(
+        "support_antecedent",
+        getSupport(col("antecedent"))
+      ).withColumn(
+        "confidence",
+        col("support") / col("support_antecedent")
+      ).drop("XY", "support_antecedent")
+    })
   }
 
   private def getNumberOfUsers(dataframe: DataFrame): Long = {
