@@ -358,13 +358,18 @@ class TopKSequentialRecommender extends Serializable {
   }
 
   private def clusterTransactions(): Unit = {
+    // getting customer cluster for each transaction
     this._transactionDf = this._transactionDf.join(this._assignedClusters, "user_id")
+
+    // getting cluster ids
     val clusters = this._assignedClusters.select(
       "customer_cluster"
     ).distinct().orderBy(
       "customer_cluster"
     ).collect().map(_.getInt(0))
 
+    // Get transactions for each customer segment and then
+    // a SOM is run to get the groups of transactions
     val transactionsGroupsAndModels = clusters.map(cluster_id => {
       val transactionGroup = this._transactionDf.where("customer_cluster == " + cluster_id)
 
@@ -387,13 +392,17 @@ class TopKSequentialRecommender extends Serializable {
   }
 
   private def obtainRules(): Unit = {
+    // getting cluster ids
     val clusters = this._assignedClusters.select(
       "customer_cluster"
     ).distinct().orderBy(
       "customer_cluster"
     ).collect().map(_.getInt(0))
 
+    // udf to flatten list and add metadata to each item
     val flatList = udf((row: List[List[(Long, List[Int])]]) => {
+      // getting list of sets being the first element the id of the period
+      // and as second element the item with its period
       val generated = row.map(element => {
         (
           element.head._1,
@@ -403,6 +412,8 @@ class TopKSequentialRecommender extends Serializable {
         )
       })
 
+      // ordering list of sequence (returning [] if that period has not items)
+      // and returning a flat map (representing a transaction for the rule extractor)
       this._periodsIds.map((id: Long) => {
         if(generated.exists(_._1 == id)) {
           generated.find(_._1 == id).orNull
@@ -412,7 +423,7 @@ class TopKSequentialRecommender extends Serializable {
       }).sortWith(_._1 < _._1).flatMap(_._2)
     })
 
-    // udf to filter rules which consequent does not have an item from the period 0
+    // udf to filter rules which consequent does not have an item from the period 0 (actual period)
     val filterAntecedent = udf((row: Array[String]) => {
       row.filter(!_.endsWith("_0"))
     })
@@ -422,7 +433,9 @@ class TopKSequentialRecommender extends Serializable {
       column1 ++ column2
     })
 
+    // For each customer segment
     this._rules = clusters.map(cluster => {
+      // get transactions per period for each user
       val transactions = this._transactionGroups(cluster).groupBy("user_id", "period_id").agg(
         collect_set(col("transaction_cluster")).as("transaction_clusters")
       ).groupBy("user_id", "period_id").agg(
