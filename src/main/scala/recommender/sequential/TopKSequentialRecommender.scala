@@ -1,7 +1,7 @@
 package recommender.sequential
 
 import accumulator.ListBufferAccumulator
-import org.apache.spark.ml.fpm.{FPGrowth, PrefixSpan}
+import org.apache.spark.ml.fpm.FPGrowth
 import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
 import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
@@ -17,7 +17,7 @@ class TopKSequentialRecommender extends Serializable {
   private var _kMeansDistance: String = "cosine"
   private var _assignedClusters: DataFrame = null
   private var _userItemDf: DataFrame = null
-  private var _transactionDf: DataFrame = null
+  var _transactionDf: DataFrame = null
   private var _customerKmeansModel: KMeansModel = null
   private var _transactionGroups: Array[DataFrame] = null
   private var _transactionsModels: Array[SOMModel] = null
@@ -59,21 +59,114 @@ class TopKSequentialRecommender extends Serializable {
   }
 
   def fit(train: DataFrame): Unit = {
+    // Get user-item matrix to cluster customers
     this._userItemDf = this.getUserItemDf(train)
+
+    // Clustering customers using Kmeans
     this.clusterCustomers()
+
+    // Get transactions per user and timestamp. Coding bought products as a binary vector
     this._transactionDf = this.getTransactionDf(train)
+
+    // Assign each transaction a period id depending on the data time provided
     this.buildPeriods()
+
+    // Cluster transactions of each customer segment using SOM
     this.clusterTransactions()
+
+    // Generating sequential rules as in CMRULES
     this.obtainRules()
-    println(this._rules.length)
-    this._rules(0).show()
-    this._rules(1).show()
-    this._rules(2).show()
-    this._rules(3).show()
-    this._rules(4).show()
+  }
+
+  private def getUserItemDf(dataframe: DataFrame): DataFrame = {
+    val session: SparkSession = SparkSession.getActiveSession.orNull
+    import session.implicits._
+
+    val groupedDf = dataframe.groupBy(
+      "item_id"
+    ).agg(
+      collect_list(col("user_id")).as("users"),
+      collect_list(col("rating")).as("ratings")
+    ).drop("user_id", "rating")
+
+    val notRepresentedItems = this.getNotRepresentedItems(groupedDf)
+    val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators
+
+    groupedDf.foreach((row: Row) => {
+      val users = row.getList(1).toArray()
+      val ratings = row.getList(2).toArray()
+
+      users.zip(ratings).foreach(UserRatingTuple => {
+        rowIndices.add(UserRatingTuple._1.asInstanceOf[Int] - 1)
+        values.add(UserRatingTuple._2.asInstanceOf[Double])
+      })
+
+      colSeparators.add(values.value.length)
+    })
+
+    val separators: ListBuffer[Long] = 0.toLong +: colSeparators.value
+
+    notRepresentedItems.foreach(index => {
+      separators.insert(
+        index - 1,
+        separators(index - 1)
+      )
+    })
+
+    val numberOfUsers = this.getNumberOfUsers(dataframe)
+
+    val sparse = new SparseMatrix(
+      numRows = numberOfUsers.toInt,
+      numCols = this._numberItems.toInt,
+      colPtrs = separators.toArray.map(_.toInt),
+      rowIndices = rowIndices.value.toArray.map(_.toInt),
+      values = values.value.toArray
+    )
+
+    val matrixRows = sparse.toDense.rowIter.toSeq.map(_.toArray)
+
+    val df = session.sparkContext.parallelize(
+      matrixRows
+    ).toDF(
+      "features"
+    ).withColumn("rowId1", monotonically_increasing_id())
+
+    val ids = dataframe.select("user_id").distinct().orderBy("user_id").withColumn(
+      "rowId2", monotonically_increasing_id()
+    )
+
+    df.join(ids, df("rowId1") === ids("rowId2"), "inner").drop("rowId1", "rowId2")
+  }
+
+  private def getNumberOfUsers(dataframe: DataFrame): Long = {
+    dataframe.select("user_id").distinct().count()
+  }
+
+  private def getNotRepresentedItems(groupedDf: DataFrame): Seq[Int] = {
+    val everyItem = Range.inclusive(1, this._numberItems.toInt).toSet
+    val actualItems = groupedDf.select(
+      "item_id"
+    ).collect().map(_.getInt(0)).toSet
+
+    everyItem.diff(actualItems).toSeq.sorted
+  }
+
+  private def createAndRegisterAccumulators: (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
+    val session: SparkSession = SparkSession.getActiveSession.orNull
+
+    val rowIndices = new ListBufferAccumulator[Long]
+    val colSeparators = new ListBufferAccumulator[Long]
+    val values = new ListBufferAccumulator[Double]
+
+    session.sparkContext.register(rowIndices, "ratings")
+    session.sparkContext.register(colSeparators, "col_separator")
+    session.sparkContext.register(values, "row_indices")
+
+    (rowIndices, colSeparators, values)
   }
 
   private def clusterCustomers(): Unit = {
+    // Fitting kmeans model
     this._customerKmeansModel = new KMeans().setDistanceMeasure(
       this._kMeansDistance
     ).setK(
@@ -84,9 +177,184 @@ class TopKSequentialRecommender extends Serializable {
       "customer_cluster"
     ).setMaxIter(10).setSeed(42L).fit(this._userItemDf)
 
+    // Obtaining assigned clusters
     this._assignedClusters = this._customerKmeansModel.transform(
       this._userItemDf
     ).drop("features")
+  }
+
+  private def getTransactionDf(train: DataFrame): DataFrame = {
+    // Group dataset by user and tiemstamp
+    val groupedByUserAndTimeStamp = train.groupBy("user_id", "timestamp").agg(
+      collect_list(col("item_id")).as("items")
+    )
+
+    // Creating udf to convert list of integers into a binary array
+    val arrayToBinary = udf((row: Array[Int]) => {
+      Vectors.sparse(
+        this._numberItems.toInt,
+        row.map((element: Int) => {
+          (element - 1, 1.0)
+        })
+      ).toDense.toArray.toList
+    })
+
+    // Calling udf
+    groupedByUserAndTimeStamp.withColumn(
+      "features", arrayToBinary(groupedByUserAndTimeStamp("items"))
+    ).drop("items")
+  }
+
+  private def buildPeriods(): Unit = {
+    // Build periods depending on the input received
+    // - ranges of datetimes provided
+    // - duration of each period provided
+    // - or desired number of periods
+
+    if (this._periodRanges != null) {
+      this.buildPeriodsFromProvidedRanges()
+    } else if (this._durationPeriod.nonEmpty) {
+      this.buildPeriodsFromDuration()
+    } else if (this._numberPeriods > 0) {
+      this.buildPeriodsFromNumberOfPartitions()
+    }
+  }
+
+  private def buildPeriodsFromProvidedRanges(): Unit = {
+    // udf to parse each timestampo to a given period depending on the datetime ranges
+    val timestampToPeriod = udf((timestamp: String) => {
+      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+      val actualTimestamp = DateTime.parse(timestamp, format)
+
+      val results = this._periodRanges.map(range => {
+        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+          range._1
+        } else {
+          -1L
+        }
+      })
+
+      if (results.forall(_ == -1L)) {
+        // In case that a transaction is not assigned to a period, it is assigned to the last one by default
+        this._periodRanges.last._1
+      } else {
+        // assigning the id of the period
+        results.filter(_ >= 0L).head
+      }
+    })
+
+    // calling the udf
+    this._transactionDf = this._transactionDf.withColumn(
+      "period_id",
+      timestampToPeriod(col("timestamp"))
+    )
+
+    val session: SparkSession = SparkSession.getActiveSession.orNull
+    import session.implicits._
+
+    // Converting the periodRanges variable to a dataframe
+    this._periods = this._periodRanges.toDF().withColumnRenamed(
+      "_1",
+      "period_id"
+    ).withColumnRenamed(
+      "_2",
+      "start"
+    ).withColumnRenamed(
+      "_3",
+      "end"
+    )
+
+    // Getting the period ids
+    this._periodsIds = this._periodRanges.map(_._1).toList
+  }
+
+  private def buildPeriodsFromDuration(): Unit = {
+    // Using window to divide by periods
+    this._transactionDf = this._transactionDf.withColumn(
+      "period",
+      window(col("timestamp"), this._durationPeriod)
+    )
+
+    // getting the set of periods of generated and generating an id
+    this._periods = this._transactionDf.select(
+      "period"
+    ).distinct().orderBy("period").withColumn(
+      "period_id",
+      monotonically_increasing_id()
+    )
+
+    // getting the ids of the periods
+    this._periodsIds = this._periods.select("period_id").orderBy("period_id").collect().map(
+      _.getLong(0)
+    ).toList
+
+    // changing the ranges generated by their id
+    this._transactionDf = this._transactionDf.join(
+      this._periods, this._transactionDf("period") === this._periods("period"), "inner"
+    ).drop("period")
+
+    // add start and end datetime
+    this._periods = this._periods.withColumn(
+      "start",
+      col("period.start")
+    ).withColumn(
+      "end",
+      col("period.end")
+    ).drop("period")
+  }
+
+  private def buildPeriodsFromNumberOfPartitions(): Unit = {
+    // get the difference between the first and the last timestamp in days
+    val diff = this._transactionDf.agg(
+      min("timestamp").as("start"),
+      max("timestamp").as("end")
+    ).withColumn(
+      "diff", datediff(col("end"), col("start"))
+    ).head().getInt(2)
+
+    // using window to establish the ranges using that difference and the number of periods
+    this._transactionDf = this._transactionDf.withColumn(
+      "period",
+      window(col("timestamp"), (diff.toDouble / this._numberPeriods.toDouble).toInt.toString + " days")
+    )
+
+    // getting unique periods and assigning them an id
+    this._periods = this._transactionDf.select(
+      "period"
+    ).distinct().orderBy("period").withColumn(
+      "period_id",
+      monotonically_increasing_id()
+    )
+
+    // If the number of periods generated is greater than the ones desired
+    // those extra periods are assigned to the last desired period
+    if (_periods.count() > this._numberPeriods) {
+      this._periods = this._periods.withColumn(
+        "period_id",
+        when(
+          col("period_id") > this._numberPeriods - 1, this._numberPeriods - 1
+        ).otherwise(col("period_id"))
+      )
+    }
+
+    // Getting perio ids
+    this._periodsIds = this._periods.select("period_id").distinct().orderBy("period_id").collect().map(
+      _.getLong(0)
+    ).toList
+
+    // changing timestamps ranges by ids in the transaction dataframe
+    this._transactionDf = this._transactionDf.join(
+      this._periods, this._transactionDf("period") === this._periods("period"), "inner"
+    ).drop("period")
+
+    // getting start and end timestamp for each period
+    this._periods = this._periods.withColumn(
+      "start",
+      col("period.start")
+    ).withColumn(
+      "end",
+      col("period.end")
+    ).drop("period")
   }
 
   private def clusterTransactions(): Unit = {
@@ -116,126 +384,6 @@ class TopKSequentialRecommender extends Serializable {
 
     this._transactionGroups = transactionsGroupsAndModels.map(_._1)
     this._transactionsModels = transactionsGroupsAndModels.map(_._2)
-  }
-
-  private def buildPeriods(): Unit = {
-    if (this._periodRanges != null) {
-      val timestampToPeriod = udf((timestamp: String) => {
-        val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
-        val actualTimestamp = DateTime.parse(timestamp, format)
-        val results = this._periodRanges.map(range => {
-          if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
-            range._1
-          } else {
-            -1L
-          }
-        })
-
-        if (results.forall(_ == -1L)) {
-          this._periodRanges.last._1
-        } else {
-          results.filter(_ >= 0L).head
-        }
-      })
-
-      this._transactionDf = this._transactionDf.withColumn(
-        "period_id",
-        timestampToPeriod(col("timestamp"))
-      )
-
-      val session: SparkSession = SparkSession.getActiveSession.orNull
-      import session.implicits._
-
-      this._periods = this._periodRanges.toDF().withColumnRenamed(
-        "_1",
-        "period_id"
-      ).withColumnRenamed(
-        "_2",
-        "start"
-      ).withColumnRenamed(
-        "_3",
-        "end"
-      )
-
-      this._periodsIds = this._periodRanges.map(_._1).toList
-
-    } else if (this._durationPeriod.nonEmpty) {
-      this._transactionDf = this._transactionDf.withColumn(
-        "period",
-        window(col("timestamp"), this._durationPeriod)
-      )
-
-      this._periods = this._transactionDf.select(
-        "period"
-      ).distinct().orderBy("period")
-
-      this._periods = this._periods.withColumn(
-        "period_id",
-        monotonically_increasing_id()
-      )
-
-      this._periodsIds = this._periods.select("period_id").orderBy("period_id").collect().map(
-        _.getLong(0)
-      ).toList
-
-      this._transactionDf = this._transactionDf.join(
-        this._periods, this._transactionDf("period") === this._periods("period"), "inner"
-      ).drop("period")
-
-      this._periods = this._periods.withColumn(
-        "start",
-        col("period.start")
-      ).withColumn(
-        "end",
-        col("period.end")
-      ).drop("period")
-    } else if (this._numberPeriods > 0) {
-      val diff = this._transactionDf.agg(
-        min("timestamp").as("start"),
-        max("timestamp").as("end")
-      ).withColumn(
-        "diff", datediff(col("end"), col("start"))
-      ).head().getInt(2)
-
-      this._transactionDf = this._transactionDf.withColumn(
-        "period",
-        window(col("timestamp"), (diff.toDouble / this._numberPeriods.toDouble).toInt.toString + " days")
-      )
-
-      this._periods = this._transactionDf.select(
-        "period"
-      ).distinct().orderBy("period")
-
-      val periodsGenerated = _periods.count()
-
-      this._periods = this._periods.withColumn(
-        "period_id",
-        monotonically_increasing_id()
-      )
-
-      this._periods = this._periods.withColumn(
-        "period_id",
-        when(
-          col("period_id") === periodsGenerated - 1, periodsGenerated - 2
-        ).otherwise(col("period_id"))
-      )
-
-      this._periodsIds = this._periods.select("period_id").distinct().orderBy("period_id").collect().map(
-        _.getLong(0)
-      ).toList
-
-      this._transactionDf = this._transactionDf.join(
-        this._periods, this._transactionDf("period") === this._periods("period"), "inner"
-      ).drop("period")
-
-      this._periods = this._periods.withColumn(
-        "start",
-        col("period.start")
-      ).withColumn(
-        "end",
-        col("period.end")
-      ).drop("period")
-    }
   }
 
   private def obtainRules(): Unit = {
@@ -336,111 +484,5 @@ class TopKSequentialRecommender extends Serializable {
         col("support") / col("support_antecedent")
       ).drop("XY", "support_antecedent")
     })
-  }
-
-  private def getNumberOfUsers(dataframe: DataFrame): Long = {
-    dataframe.select("user_id").distinct().count()
-  }
-
-  private def getNotRepresentedItems(groupedDf: DataFrame): Seq[Int] = {
-    val everyItem = Range.inclusive(1, this._numberItems.toInt).toSet
-    val actualItems = groupedDf.select(
-      "item_id"
-    ).collect().map(_.getInt(0)).toSet
-
-    everyItem.diff(actualItems).toSeq.sorted
-  }
-
-  private def createAndRegisterAccumulators: (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-
-    val rowIndices = new ListBufferAccumulator[Long]
-    val colSeparators = new ListBufferAccumulator[Long]
-    val values = new ListBufferAccumulator[Double]
-
-    session.sparkContext.register(rowIndices, "ratings")
-    session.sparkContext.register(colSeparators, "col_separator")
-    session.sparkContext.register(values, "row_indices")
-
-    (rowIndices, colSeparators, values)
-  }
-
-  private def getUserItemDf(dataframe: DataFrame): DataFrame = {
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-    import session.implicits._
-
-    val groupedDf = dataframe.groupBy(
-      "item_id"
-    ).agg(
-      collect_list(col("user_id")).as("users"),
-      collect_list(col("rating")).as("ratings")
-    ).drop("user_id", "rating")
-
-    val notRepresentedItems = this.getNotRepresentedItems(groupedDf)
-    val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators
-
-    groupedDf.foreach((row: Row) => {
-      val users = row.getList(1).toArray()
-      val ratings = row.getList(2).toArray()
-
-      users.zip(ratings).foreach(UserRatingTuple => {
-        rowIndices.add(UserRatingTuple._1.asInstanceOf[Int] - 1)
-        values.add(UserRatingTuple._2.asInstanceOf[Double])
-      })
-
-      colSeparators.add(values.value.length)
-    })
-
-    val separators: ListBuffer[Long] = 0.toLong +: colSeparators.value
-
-    notRepresentedItems.foreach(index => {
-      separators.insert(
-        index - 1,
-        separators(index - 1)
-      )
-    })
-
-    val numberOfUsers = this.getNumberOfUsers(dataframe)
-
-    val sparse = new SparseMatrix(
-      numRows = numberOfUsers.toInt,
-      numCols = this._numberItems.toInt,
-      colPtrs = separators.toArray.map(_.toInt),
-      rowIndices = rowIndices.value.toArray.map(_.toInt),
-      values = values.value.toArray
-    )
-
-    val matrixRows = sparse.toDense.rowIter.toSeq.map(_.toArray)
-
-    val df = session.sparkContext.parallelize(
-      matrixRows
-    ).toDF(
-      "features"
-    ).withColumn("rowId1", monotonically_increasing_id())
-
-    val ids = dataframe.select("user_id").distinct().orderBy("user_id").withColumn(
-      "rowId2", monotonically_increasing_id()
-    )
-
-    df.join(ids, df("rowId1") === ids("rowId2"), "inner").drop("rowId1", "rowId2")
-  }
-
-  private def getTransactionDf(train: DataFrame): DataFrame = {
-    val groupedByUserAndTimeStamp = train.groupBy("user_id", "timestamp").agg(
-      collect_list(col("item_id")).as("items")
-    )
-
-    val arrayToBinary = udf((row: Array[Int]) => {
-      Vectors.sparse(
-        this._numberItems.toInt,
-        row.map((element: Int) => {
-          (element - 1, 1.0)
-        })
-      ).toDense.toArray.toList
-    })
-
-    groupedByUserAndTimeStamp.withColumn(
-      "features", arrayToBinary(groupedByUserAndTimeStamp("items"))
-    ).drop("items")
   }
 }
