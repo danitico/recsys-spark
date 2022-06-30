@@ -16,7 +16,7 @@ class TopKSequentialRecommender extends Serializable {
   private var _kCustomers: Int = -1
   private var _kMeansDistance: String = "cosine"
   private var _assignedClusters: DataFrame = null
-  private var _userItemDf: DataFrame = null
+  var _userItemDf: DataFrame = null
   var _transactionDf: DataFrame = null
   private var _customerKmeansModel: KMeansModel = null
   private var _transactionGroups: Array[DataFrame] = null
@@ -77,6 +77,41 @@ class TopKSequentialRecommender extends Serializable {
     // Generating sequential rules as in CMRULES
     this.obtainRules()
   }
+
+  def transform(transactionsUser: DataFrame): Unit = {
+    val userFeatures = this.getUserItemDf(transactionsUser)
+
+    val cluster = this._customerKmeansModel.transform(
+      userFeatures
+    ).select("customer_cluster").first().getInt(0)
+
+    val transactionDf = this.getTransactionDf(transactionsUser)
+    //val transactionDfWithPeriods =
+
+  }
+  // TODO: Problem of using dataframe operations inside other dataframe operation. Need to transform this._periods to a list or something like that
+//  def transformPeriods(transactions: DataFrame): DataFrame = {
+//    val timestampToPeriod = udf((timestamp: String) => {
+//      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+//      val actualTimestamp = DateTime.parse(timestamp, format)
+//
+//      val results = this._periodRanges.map(range => {
+//        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+//          range._1
+//        } else {
+//          -1L
+//        }
+//      })
+//
+//      if (results.forall(_ == -1L)) {
+//        // In case that a transaction is not assigned to a period, it is assigned to the last one by default
+//        this._periodRanges.last._1
+//      } else {
+//        // assigning the id of the period
+//        results.filter(_ >= 0L).head
+//      }
+//    })
+//  }
 
   private def getUserItemDf(dataframe: DataFrame): DataFrame = {
     val session: SparkSession = SparkSession.getActiveSession.orNull
