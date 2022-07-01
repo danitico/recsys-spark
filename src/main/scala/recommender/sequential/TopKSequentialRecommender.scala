@@ -23,7 +23,7 @@ class TopKSequentialRecommender extends Serializable {
   private var _transactionsModels: Array[SOMModel] = null
   private var _periodRanges: Seq[(Long, String, String)] = null
   private var _durationPeriod: String = ""
-  private var _periods: DataFrame = null
+  private var _periods: Seq[(Long, String, String)] = null
   private var _periodsIds: List[Long] = null
   private var _numberPeriods: Int = -1
   private var _rules: Array[DataFrame] = null
@@ -86,32 +86,76 @@ class TopKSequentialRecommender extends Serializable {
     ).select("customer_cluster").first().getInt(0)
 
     val transactionDf = this.getTransactionDf(transactionsUser)
-    //val transactionDfWithPeriods =
+    val transactionDfWithPeriods = this.transformPeriods(transactionDf)
+    val transactionsWithClusters = this._transactionsModels(cluster).transform(
+      transactionDfWithPeriods
+    )
+
 
   }
-  // TODO: Problem of using dataframe operations inside other dataframe operation. Need to transform this._periods to a list or something like that
-//  def transformPeriods(transactions: DataFrame): DataFrame = {
-//    val timestampToPeriod = udf((timestamp: String) => {
-//      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
-//      val actualTimestamp = DateTime.parse(timestamp, format)
-//
-//      val results = this._periodRanges.map(range => {
-//        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
-//          range._1
-//        } else {
-//          -1L
-//        }
-//      })
-//
-//      if (results.forall(_ == -1L)) {
-//        // In case that a transaction is not assigned to a period, it is assigned to the last one by default
-//        this._periodRanges.last._1
-//      } else {
-//        // assigning the id of the period
-//        results.filter(_ >= 0L).head
-//      }
-//    })
-//  }
+
+  def transformPeriods(transactions: DataFrame): DataFrame = {
+    val timestampToPeriod = udf((timestamp: String) => {
+      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+      val actualTimestamp = DateTime.parse(timestamp, format)
+
+      val results = this._periods.map(range => {
+        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+          range._1
+        } else {
+          -1L
+        }
+      })
+
+      if (results.forall(_ == -1L)) {
+        // In case that a transaction is not assigned to a period, it is assigned to the last one by default
+        this._periods.last._1
+      } else {
+        // assigning the id of the period
+        results.filter(_ >= 0L).head
+      }
+    })
+
+    transactions.withColumn(
+      "period_id",
+      timestampToPeriod(col("timestamp"))
+    ).drop("timestamp")
+  }
+
+  private def obtainItemsForTargetUser(transactionsWithClusters: DataFrame): Unit = {
+    val flatList = udf((row: List[List[(Long, List[Int])]]) => {
+      // getting list of sets being the first element the id of the period
+      // and as second element the item with its period
+      val generated = row.map(element => {
+        (
+          element.head._1,
+          element.head._2.map(
+            _.toString + "_" + (element.head._1 - this._periodsIds.length + 1).toString
+          )
+        )
+      })
+
+      // ordering list of sequence (returning [] if that period has not items)
+      // and returning a flat map (representing a transaction for the rule extractor)
+      this._periodsIds.map((id: Long) => {
+        if(generated.exists(_._1 == id)) {
+          generated.find(_._1 == id).orNull
+        } else {
+          (id, Seq())
+        }
+      }).sortWith(_._1 < _._1).flatMap(_._2)
+    })
+
+    transactionsWithClusters.groupBy("period_id").agg(
+      collect_set(col("transaction_cluster")).as("transaction_clusters")
+    ).groupBy("period_id").agg(
+      collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
+    ).withColumn(
+      "items",
+      flatList(col("tuple_period_cluster"))
+    ).select("items").collect()
+    // TODO: continuo aquí, devuelvo directamente lista de strings
+  }
 
   private def getUserItemDf(dataframe: DataFrame): DataFrame = {
     val session: SparkSession = SparkSession.getActiveSession.orNull
@@ -284,23 +328,10 @@ class TopKSequentialRecommender extends Serializable {
       timestampToPeriod(col("timestamp"))
     )
 
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-    import session.implicits._
-
-    // Converting the periodRanges variable to a dataframe
-    this._periods = this._periodRanges.toDF().withColumnRenamed(
-      "_1",
-      "period_id"
-    ).withColumnRenamed(
-      "_2",
-      "start"
-    ).withColumnRenamed(
-      "_3",
-      "end"
-    )
+    this._periods = this._periodRanges
 
     // Getting the period ids
-    this._periodsIds = this._periodRanges.map(_._1).toList
+    this._periodsIds = this._periods.map(_._1).toList
   }
 
   private def buildPeriodsFromDuration(): Unit = {
@@ -311,31 +342,31 @@ class TopKSequentialRecommender extends Serializable {
     )
 
     // getting the set of periods of generated and generating an id
-    this._periods = this._transactionDf.select(
+    val periods = this._transactionDf.select(
       "period"
     ).distinct().orderBy("period").withColumn(
       "period_id",
       monotonically_increasing_id()
     )
 
-    // getting the ids of the periods
-    this._periodsIds = this._periods.select("period_id").orderBy("period_id").collect().map(
-      _.getLong(0)
-    ).toList
-
     // changing the ranges generated by their id
     this._transactionDf = this._transactionDf.join(
-      this._periods, this._transactionDf("period") === this._periods("period"), "inner"
+      periods, this._transactionDf("period") === periods("period"), "inner"
     ).drop("period")
 
     // add start and end datetime
-    this._periods = this._periods.withColumn(
+    this._periods = periods.withColumn(
       "start",
       col("period.start")
     ).withColumn(
       "end",
       col("period.end")
-    ).drop("period")
+    ).drop("period").collect().toSeq.map(row => {
+      (row.getLong(0), row.getString(1), row.getString(2))
+    })
+
+    // Getting period ids
+    this._periodsIds = this._periods.map(_._1).toList
   }
 
   private def buildPeriodsFromNumberOfPartitions(): Unit = {
@@ -354,7 +385,7 @@ class TopKSequentialRecommender extends Serializable {
     )
 
     // getting unique periods and assigning them an id
-    this._periods = this._transactionDf.select(
+    var periods = this._transactionDf.select(
       "period"
     ).distinct().orderBy("period").withColumn(
       "period_id",
@@ -363,8 +394,8 @@ class TopKSequentialRecommender extends Serializable {
 
     // If the number of periods generated is greater than the ones desired
     // those extra periods are assigned to the last desired period
-    if (_periods.count() > this._numberPeriods) {
-      this._periods = this._periods.withColumn(
+    if (periods.count() > this._numberPeriods) {
+      periods = periods.withColumn(
         "period_id",
         when(
           col("period_id") > this._numberPeriods - 1, this._numberPeriods - 1
@@ -372,24 +403,24 @@ class TopKSequentialRecommender extends Serializable {
       )
     }
 
-    // Getting perio ids
-    this._periodsIds = this._periods.select("period_id").distinct().orderBy("period_id").collect().map(
-      _.getLong(0)
-    ).toList
-
     // changing timestamps ranges by ids in the transaction dataframe
     this._transactionDf = this._transactionDf.join(
-      this._periods, this._transactionDf("period") === this._periods("period"), "inner"
+      periods, this._transactionDf("period") === periods("period"), "inner"
     ).drop("period")
 
     // getting start and end timestamp for each period
-    this._periods = this._periods.withColumn(
+    this._periods = periods.withColumn(
       "start",
       col("period.start")
     ).withColumn(
       "end",
       col("period.end")
-    ).drop("period")
+    ).drop("period").collect().toSeq.map(row => {
+      (row.getLong(0), row.getString(1), row.getString(2))
+    })
+
+    // Getting period ids
+    this._periodsIds = this._periods.map(_._1).toList
   }
 
   private def clusterTransactions(): Unit = {
