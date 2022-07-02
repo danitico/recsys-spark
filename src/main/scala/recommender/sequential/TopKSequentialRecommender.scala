@@ -3,7 +3,7 @@ package recommender.sequential
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.fpm.FPGrowth
 import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import som.{SOM, SOMModel}
@@ -78,12 +78,17 @@ class TopKSequentialRecommender extends Serializable {
     this.obtainRules()
   }
 
-  def transform(transactionsUser: DataFrame): Unit = {
-    val userFeatures = this.getUserItemDf(transactionsUser)
+  def transform(transactionsUser: DataFrame): Set[Int] = {
+    val userFeatures = Vectors.sparse(
+      this._numberItems.toInt,
+      transactionsUser.select(
+        "item_id", "rating"
+      ).collect().map(row => {
+        (row.getInt(0) - 1, row.getDouble(1))
+      }).toSeq
+    )
 
-    val cluster = this._customerKmeansModel.transform(
-      userFeatures
-    ).select("customer_cluster").first().getInt(0)
+    val cluster = this._customerKmeansModel.predict(userFeatures)
 
     val transactionDf = this.getTransactionDf(transactionsUser)
     val transactionDfWithPeriods = this.transformPeriods(transactionDf)
@@ -91,16 +96,48 @@ class TopKSequentialRecommender extends Serializable {
       transactionDfWithPeriods
     )
 
+    val items = this.obtainItemsForTargetUser(transactionsWithClusters)
+    val desiredConsequent = this.getMostAppropiateConsequent(items, cluster)
 
+    if (desiredConsequent == -1) {
+      Set()
+    } else {
+      val binaryToInt = udf((row: List[Double]) => {
+        row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
+      })
+
+      val transactionsAtT = this._transactionGroups(cluster).where(
+        s"transaction_cluster == $desiredConsequent"
+      ).where(
+        s"period_id == ${this._periodsIds.last}"
+      )
+
+      if (transactionsAtT.count() == 0L) {
+        Set()
+      } else {
+        transactionsAtT.select("features").withColumn(
+          "items",
+          binaryToInt(col("features"))
+        ).drop("features").withColumn(
+          "items",
+          explode(col("items"))
+        ).groupBy("items").count().where(
+          "count > 0"
+        ).orderBy(
+          col("count").desc
+        ).select("items").head(5).map(_.getInt(0)).toSet
+      }
+    }
   }
 
-  def transformPeriods(transactions: DataFrame): DataFrame = {
+  private def transformPeriods(transactions: DataFrame): DataFrame = {
     val timestampToPeriod = udf((timestamp: String) => {
-      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
-      val actualTimestamp = DateTime.parse(timestamp, format)
+      val formatInDataframe = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+      val formatInPeriods = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.S")
+      val actualTimestamp = DateTime.parse(timestamp, formatInDataframe)
 
       val results = this._periods.map(range => {
-        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+        if (actualTimestamp >= DateTime.parse(range._2, formatInPeriods) && actualTimestamp < DateTime.parse(range._3, formatInPeriods)) {
           range._1
         } else {
           -1L
@@ -122,7 +159,7 @@ class TopKSequentialRecommender extends Serializable {
     ).drop("timestamp")
   }
 
-  private def obtainItemsForTargetUser(transactionsWithClusters: DataFrame): Unit = {
+  private def obtainItemsForTargetUser(transactionsWithClusters: DataFrame): List[String] = {
     val flatList = udf((row: List[List[(Long, List[Int])]]) => {
       // getting list of sets being the first element the id of the period
       // and as second element the item with its period
@@ -146,15 +183,41 @@ class TopKSequentialRecommender extends Serializable {
       }).sortWith(_._1 < _._1).flatMap(_._2)
     })
 
-    transactionsWithClusters.groupBy("period_id").agg(
+    transactionsWithClusters.groupBy("user_id", "period_id").agg(
       collect_set(col("transaction_cluster")).as("transaction_clusters")
-    ).groupBy("period_id").agg(
+    ).groupBy("user_id", "period_id").agg(
       collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
+    ).groupBy("user_id").agg(
+      collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
     ).withColumn(
       "items",
-      flatList(col("tuple_period_cluster"))
-    ).select("items").collect()
-    // TODO: continuo aquí, devuelvo directamente lista de strings
+      flatList(col("tuple_period_cluster_per_user"))
+    ).select("items").first().getList(0).toArray.map(_.asInstanceOf[String]).toList
+  }
+
+  private def getMostAppropiateConsequent(items: List[String], cluster: Int): Int = {
+    val getScore = udf((antecedent: List[String], support: Double, confidence: Double) => {
+      val similarity = antecedent.map(element => {
+        if (items.contains(element)) 1 else 0
+      }).sum.toDouble
+
+      similarity * support * confidence
+    })
+
+    val transactionClusterWithPeriod = this._rules(cluster).withColumn(
+      "score",
+      getScore(col("antecedent"), col("support"), col("confidence"))
+    ).where("score > 0")
+
+    if (transactionClusterWithPeriod.count() == 0L) {
+      -1
+    } else {
+      transactionClusterWithPeriod.orderBy(
+        col("score").desc
+      ).select(
+        "consequent"
+      ).first().getList(0).toArray.head.asInstanceOf[String].split("_").head.toInt
+    }
   }
 
   private def getUserItemDf(dataframe: DataFrame): DataFrame = {
@@ -302,11 +365,12 @@ class TopKSequentialRecommender extends Serializable {
   private def buildPeriodsFromProvidedRanges(): Unit = {
     // udf to parse each timestampo to a given period depending on the datetime ranges
     val timestampToPeriod = udf((timestamp: String) => {
-      val format = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
-      val actualTimestamp = DateTime.parse(timestamp, format)
+      val formatInDataframe = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
+      val formatInPeriods = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.S")
+      val actualTimestamp = DateTime.parse(timestamp, formatInDataframe)
 
       val results = this._periodRanges.map(range => {
-        if (actualTimestamp >= DateTime.parse(range._2, format) && actualTimestamp < DateTime.parse(range._3, format)) {
+        if (actualTimestamp >= DateTime.parse(range._2, formatInPeriods) && actualTimestamp < DateTime.parse(range._3, formatInPeriods)) {
           range._1
         } else {
           -1L
@@ -362,7 +426,7 @@ class TopKSequentialRecommender extends Serializable {
       "end",
       col("period.end")
     ).drop("period").collect().toSeq.map(row => {
-      (row.getLong(0), row.getString(1), row.getString(2))
+      (row.getLong(0), row.getTimestamp(1).toString, row.getTimestamp(2).toString)
     })
 
     // Getting period ids
@@ -516,7 +580,7 @@ class TopKSequentialRecommender extends Serializable {
       ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
       // train fpgrowth model
-      val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.05).setMinConfidence(0.7)
+      val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.05).setMinConfidence(0.75)
       val model = fpgrowth.fit(transactions)
 
       // Remove from the antecedent those items belonging to period 0

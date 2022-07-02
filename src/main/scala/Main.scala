@@ -4,7 +4,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime, to_timestamp}
 import accumulator.ListBufferAccumulator
 import metrics.TopKMetrics
-import org.apache.spark.ml.linalg.SparseVector
+import org.apache.spark.ml.linalg.{SparseVector, Vectors}
 import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.item_based.ItemBasedRatingRecommender
 import recommender.content.ContentBasedRatingRecommender
@@ -265,9 +265,9 @@ object Main {
     spark.sparkContext.setLogLevel("WARN")
 
     val timePeriods = Seq(
-      (0L, "1997-08-09 02:00:00", "1997-10-19 02:00:00"),
-      (1L, "1997-10-19 02:00:00", "1997-12-29 01:00:00"),
-      (2L, "1997-12-29 01:00:00", "1998-05-20 02:00:00")
+      (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
+      (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
+      (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
     )
 
     val recsys = new TopKSequentialRecommender().setKCustomer(
@@ -275,8 +275,11 @@ object Main {
     ).setNumberItems(1682).setKMeansDistance("cosine").setPeriods("90 days")
 
     val train = dataset("data/train-fold1.csv")
+    val test = dataset("data/test-fold1.csv")
 
     recsys.fit(train)
+
+    println(recsys.transform(test.where("user_id == 7")))
 
     spark.stop()
   }
