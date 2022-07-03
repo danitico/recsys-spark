@@ -2,7 +2,6 @@ package recommender.sequential
 
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.fpm.FPGrowth
-import org.apache.spark.ml.clustering.{KMeans, KMeansModel}
 import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
@@ -13,33 +12,42 @@ import scala.collection.mutable.ListBuffer
 
 class TopKSequentialRecommender extends Serializable {
   private var _numberItems: Long = -1
-  private var _kCustomers: Int = -1
-  private var _kMeansDistance: String = "cosine"
-  private var _assignedClusters: DataFrame = null
-  var _userItemDf: DataFrame = null
-  var _transactionDf: DataFrame = null
-  private var _customerKmeansModel: KMeansModel = null
-  private var _transactionGroups: Array[DataFrame] = null
-  private var _transactionsModels: Array[SOMModel] = null
+  private var _userItemDf: DataFrame = null
+  private var _transactionDf: DataFrame = null
+  private var _transactionModel: SOMModel = null
   private var _periodRanges: Seq[(Long, String, String)] = null
   private var _durationPeriod: String = ""
   private var _periods: Seq[(Long, String, String)] = null
   private var _periodsIds: List[Long] = null
   private var _numberPeriods: Int = -1
-  private var _rules: Array[DataFrame] = null
+  private var _rules: DataFrame = null
+  private var _heightGridSom: Int = 5
+  private var _widthGridSom: Int = 5
+  private var _minSupportApriori: Double = 0.0
+  private var _minConfidenceApriori: Double = 0.0
+  private var _minSupportSequential: Double = 0.0
+  private var _minConfidenceSequential: Double = 0.0
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
     this
   }
 
-  def setKCustomer(kCustomers: Int): this.type = {
-    this._kCustomers = kCustomers
+  def setGridSize(height: Int, width: Int): this.type = {
+    this._heightGridSom = height
+    this._widthGridSom = width
     this
   }
 
-  def setKMeansDistance(distance: String): this.type = {
-    this._kMeansDistance = distance
+  def setMinParamsApriori(minSupport: Double, minConfidence: Double): this.type = {
+    this._minSupportApriori = minSupport
+    this._minConfidenceApriori = minConfidence
+    this
+  }
+
+  def setMinParamsSequential(minSupport: Double, minConfidence: Double): this.type = {
+    this._minSupportSequential = minSupport
+    this._minConfidenceSequential = minConfidence
     this
   }
 
@@ -62,9 +70,6 @@ class TopKSequentialRecommender extends Serializable {
     // Get user-item matrix to cluster customers
     this._userItemDf = this.getUserItemDf(train)
 
-    // Clustering customers using Kmeans
-    this.clusterCustomers()
-
     // Get transactions per user and timestamp. Coding bought products as a binary vector
     this._transactionDf = this.getTransactionDf(train)
 
@@ -74,30 +79,20 @@ class TopKSequentialRecommender extends Serializable {
     // Cluster transactions of each customer segment using SOM
     this.clusterTransactions()
 
+    println("Generando reglas")
     // Generating sequential rules as in CMRULES
     this.obtainRules()
   }
 
   def transform(transactionsUser: DataFrame): Set[Int] = {
-    val userFeatures = Vectors.sparse(
-      this._numberItems.toInt,
-      transactionsUser.select(
-        "item_id", "rating"
-      ).collect().map(row => {
-        (row.getInt(0) - 1, row.getDouble(1))
-      }).toSeq
-    )
-
-    val cluster = this._customerKmeansModel.predict(userFeatures)
-
     val transactionDf = this.getTransactionDf(transactionsUser)
     val transactionDfWithPeriods = this.transformPeriods(transactionDf)
-    val transactionsWithClusters = this._transactionsModels(cluster).transform(
+    val transactionsWithClusters = this._transactionModel.transform(
       transactionDfWithPeriods
     )
 
     val items = this.obtainItemsForTargetUser(transactionsWithClusters)
-    val desiredConsequent = this.getMostAppropiateConsequent(items, cluster)
+    val desiredConsequent = this.getMostAppropiateConsequent(items)
 
     if (desiredConsequent == -1) {
       Set()
@@ -106,16 +101,20 @@ class TopKSequentialRecommender extends Serializable {
         row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
       })
 
-      val transactionsAtT = this._transactionGroups(cluster).where(
+      val transactionsAtT = this._transactionDf.where(
         s"transaction_cluster == $desiredConsequent"
       ).where(
         s"period_id == ${this._periodsIds.last}"
       )
 
-      if (transactionsAtT.count() == 0L) {
+      if (transactionsAtT.isEmpty) {
         Set()
       } else {
-        transactionsAtT.select("features").withColumn(
+        val previouslyItems = transactionsUser.select(
+          "item_id"
+        ).distinct().collect().map(_.getInt(0)).toSet
+
+        val candidates = transactionsAtT.select("features").withColumn(
           "items",
           binaryToInt(col("features"))
         ).drop("features").withColumn(
@@ -123,7 +122,11 @@ class TopKSequentialRecommender extends Serializable {
           explode(col("items"))
         ).groupBy("items").count().where(
           "count > 0"
-        ).orderBy(
+        )
+
+        candidates.filter(row => {
+          !previouslyItems.contains(row.getInt(0))
+        }).orderBy(
           col("count").desc
         ).select("items").head(5).map(_.getInt(0)).toSet
       }
@@ -195,7 +198,7 @@ class TopKSequentialRecommender extends Serializable {
     ).select("items").first().getList(0).toArray.map(_.asInstanceOf[String]).toList
   }
 
-  private def getMostAppropiateConsequent(items: List[String], cluster: Int): Int = {
+  private def getMostAppropiateConsequent(items: List[String]): Int = {
     val getScore = udf((antecedent: List[String], support: Double, confidence: Double) => {
       val similarity = antecedent.map(element => {
         if (items.contains(element)) 1 else 0
@@ -204,15 +207,16 @@ class TopKSequentialRecommender extends Serializable {
       similarity * support * confidence
     })
 
-    val transactionClusterWithPeriod = this._rules(cluster).withColumn(
+    val rulesWithScore = this._rules.withColumn(
       "score",
       getScore(col("antecedent"), col("support"), col("confidence"))
-    ).where("score > 0")
+    )
+    val filteredRules = rulesWithScore.where("score > 0")
 
-    if (transactionClusterWithPeriod.count() == 0L) {
+    if (filteredRules.isEmpty) {
       -1
     } else {
-      transactionClusterWithPeriod.orderBy(
+      filteredRules.orderBy(
         col("score").desc
       ).select(
         "consequent"
@@ -305,24 +309,6 @@ class TopKSequentialRecommender extends Serializable {
     session.sparkContext.register(values, "row_indices")
 
     (rowIndices, colSeparators, values)
-  }
-
-  private def clusterCustomers(): Unit = {
-    // Fitting kmeans model
-    this._customerKmeansModel = new KMeans().setDistanceMeasure(
-      this._kMeansDistance
-    ).setK(
-      this._kCustomers
-    ).setFeaturesCol(
-      "features"
-    ).setPredictionCol(
-      "customer_cluster"
-    ).setMaxIter(10).setSeed(42L).fit(this._userItemDf)
-
-    // Obtaining assigned clusters
-    this._assignedClusters = this._customerKmeansModel.transform(
-      this._userItemDf
-    ).drop("features")
   }
 
   private def getTransactionDf(train: DataFrame): DataFrame = {
@@ -488,47 +474,22 @@ class TopKSequentialRecommender extends Serializable {
   }
 
   private def clusterTransactions(): Unit = {
-    // getting customer cluster for each transaction
-    this._transactionDf = this._transactionDf.join(this._assignedClusters, "user_id")
-
-    // getting cluster ids
-    val clusters = this._assignedClusters.select(
-      "customer_cluster"
-    ).distinct().orderBy(
-      "customer_cluster"
-    ).collect().map(_.getInt(0))
-
-    // Get transactions for each customer segment and then
     // a SOM is run to get the groups of transactions
-    val transactionsGroupsAndModels = clusters.map(cluster_id => {
-      val transactionGroup = this._transactionDf.where("customer_cluster == " + cluster_id)
+    this._transactionModel = new SOM().setMaxIter(10).setHeight(
+      this._heightGridSom
+    ).setWidth(
+      this._widthGridSom
+    ).setFeaturesCol(
+      "features"
+    ).setPredictionCol(
+      "transaction_cluster"
+    ).setSeed(42L).fit(this._transactionDf)
 
-      val model = new SOM().setMaxIter(10).setHeight(
-        2
-      ).setWidth(
-        2
-      ).setFeaturesCol(
-        "features"
-      ).setPredictionCol(
-        "transaction_cluster"
-      ).setSeed(42L).fit(transactionGroup)
-      val transactionGroupWithPrediction = model.transform(transactionGroup)
-
-      (transactionGroupWithPrediction, model)
-    })
-
-    this._transactionGroups = transactionsGroupsAndModels.map(_._1)
-    this._transactionsModels = transactionsGroupsAndModels.map(_._2)
+    this._transactionDf = this._transactionModel.transform(this._transactionDf)
+    this._transactionDf.show(50)
   }
 
   private def obtainRules(): Unit = {
-    // getting cluster ids
-    val clusters = this._assignedClusters.select(
-      "customer_cluster"
-    ).distinct().orderBy(
-      "customer_cluster"
-    ).collect().map(_.getInt(0))
-
     // udf to flatten list and add metadata to each item
     val flatList = udf((row: List[List[(Long, List[Int])]]) => {
       // getting list of sets being the first element the id of the period
@@ -563,69 +524,83 @@ class TopKSequentialRecommender extends Serializable {
       column1 ++ column2
     })
 
-    // For each customer segment
-    this._rules = clusters.map(cluster => {
-      // get transactions per period for each user
-      val transactions = this._transactionGroups(cluster).groupBy("user_id", "period_id").agg(
-        collect_set(col("transaction_cluster")).as("transaction_clusters")
-      ).groupBy("user_id", "period_id").agg(
-        collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
-      ).groupBy("user_id").agg(
-        collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
-      ).withColumn(
-        "items",
-        flatList(
-          col("tuple_period_cluster_per_user")
-        )
-      ).drop("tuple_period_cluster_per_user").orderBy("user_id")
+    // get transactions per period for each user
+    val transactions = this._transactionDf.groupBy("user_id", "period_id").agg(
+      collect_set(col("transaction_cluster")).as("transaction_clusters")
+    ).groupBy("user_id", "period_id").agg(
+      collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
+    ).groupBy("user_id").agg(
+      collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
+    ).withColumn(
+      "items",
+      flatList(
+        col("tuple_period_cluster_per_user")
+      )
+    ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
-      // train fpgrowth model
-      val fpgrowth = new FPGrowth().setItemsCol("items").setMinSupport(0.05).setMinConfidence(0.75)
-      val model = fpgrowth.fit(transactions)
+    // train fpgrowth model
+    val fpgrowth = new FPGrowth().setItemsCol(
+      "items"
+    ).setMinSupport(
+      this._minSupportApriori
+    ).setMinConfidence(
+      this._minConfidenceApriori
+    )
+    val model = fpgrowth.fit(transactions)
 
-      // Remove from the antecedent those items belonging to period 0
-      // and removing columns of metrics related to rules
-      // because they were extracted from the original rules
-      // After that, distinct rules are obtained
-      val rules = model.associationRules.filter(row => {
-        val consequent = row.getList(1).toArray()
-        consequent.head.asInstanceOf[String].endsWith("_0")
-      }).withColumn(
-        "antecedent",
-        filterAntecedent(col("antecedent"))
-      ).filter(row => row.getList(0).toArray().nonEmpty).drop(
-        "confidence", "lift", "support"
-      ).distinct()
+    // Remove from the antecedent those items belonging to period 0
+    // and removing columns of metrics related to rules
+    // because they were extracted from the original rules
+    // After that, distinct rules are obtained
+    val rules = model.associationRules.filter(row => {
+      val consequent = row.getList(1).toArray()
+      consequent.head.asInstanceOf[String].endsWith("_0")
+    }).withColumn(
+      "antecedent",
+      filterAntecedent(col("antecedent"))
+    ).filter(row => row.getList(0).toArray().nonEmpty).drop(
+      "confidence", "lift", "support"
+    ).distinct()
 
-      // Solving support and confidence for the new set of rules
-      val numberOfTransactions = transactions.count()
-      val transactionsArray = transactions.select("items").collect().map(_.getList(0).toArray())
+    rules.show(200)
 
-      // udf for support
-      val getSupport = udf((row: List[String]) => {
-        transactionsArray.map(transaction => {
-          if (row.toSet.subsetOf(transaction.map(_.asInstanceOf[String]).toSet)) {
-            1.0
-          } else {
-            0.0
-          }
-        }).sum / numberOfTransactions.toDouble
-      })
+    // Solving support and confidence for the new set of rules
+    val numberOfTransactions = transactions.count()
+    val transactionsArray = transactions.select("items").collect().map(_.getList(0).toArray())
 
-      // rules with support and confidence
-      rules.withColumn(
-        "XY",
-        getXY(col("antecedent"), col("consequent"))
-      ).withColumn(
-        "support",
-        getSupport(col("XY"))
-      ).withColumn(
-        "support_antecedent",
-        getSupport(col("antecedent"))
-      ).withColumn(
-        "confidence",
-        col("support") / col("support_antecedent")
-      ).drop("XY", "support_antecedent")
+    // udf for support
+    val getSupport = udf((row: List[String]) => {
+      transactionsArray.map(transaction => {
+        if (row.toSet.subsetOf(transaction.map(_.asInstanceOf[String]).toSet)) {
+          1.0
+        } else {
+          0.0
+        }
+      }).sum / numberOfTransactions.toDouble
     })
+
+    // rules with support and confidence
+    val sequentialRules = rules.withColumn(
+      "XY",
+      getXY(col("antecedent"), col("consequent"))
+    ).withColumn(
+      "support",
+      getSupport(col("XY"))
+    ).withColumn(
+      "support_antecedent",
+      getSupport(col("antecedent"))
+    ).withColumn(
+      "confidence",
+      col("support") / col("support_antecedent")
+    ).drop("XY", "support_antecedent")
+
+    sequentialRules.show(200)
+
+    // filter sequential rules with min support and confidence
+    this._rules = sequentialRules.where(
+      s"support > ${this._minSupportSequential}"
+    ).where(
+      s"confidence > ${this._minConfidenceSequential}"
+    )
   }
 }

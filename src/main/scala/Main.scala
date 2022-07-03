@@ -270,16 +270,20 @@ object Main {
       (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
     )
 
-    val recsys = new TopKSequentialRecommender().setKCustomer(
-      5
-    ).setNumberItems(1682).setKMeansDistance("cosine").setPeriods("90 days")
+    val recsys = new TopKSequentialRecommender().setGridSize(
+      3, 3
+    ).setNumberItems(1682).setMinParamsApriori(
+      0.05, 0.75
+    ).setMinParamsSequential(
+      0.05, 0.75
+    ).setPeriods("90 days")
 
     val train = dataset("data/train-fold1.csv")
     val test = dataset("data/test-fold1.csv")
 
     recsys.fit(train)
 
-    println(recsys.transform(test.where("user_id == 7")))
+    println(recsys.transform(train.where("user_id == 11")))
 
     spark.stop()
   }
