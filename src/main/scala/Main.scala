@@ -276,7 +276,7 @@ object Main {
       0.05, 0.75
     ).setMinParamsSequential(
       0.05, 0.75
-    ).setPeriods("90 days")
+    ).setPeriods(2)
 
     val train = dataset("data/train-fold1.csv")
     val test = dataset("data/test-fold1.csv")

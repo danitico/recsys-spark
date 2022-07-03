@@ -466,11 +466,11 @@ class TopKSequentialRecommender extends Serializable {
       "end",
       col("period.end")
     ).drop("period").collect().toSeq.map(row => {
-      (row.getLong(0), row.getString(1), row.getString(2))
+      (row.getLong(0), row.getTimestamp(1).toString, row.getTimestamp(2).toString)
     })
 
     // Getting period ids
-    this._periodsIds = this._periods.map(_._1).toList
+    this._periodsIds = this._periods.map(_._1).distinct.toList
   }
 
   private def clusterTransactions(): Unit = {
