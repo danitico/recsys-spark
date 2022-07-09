@@ -174,11 +174,8 @@ object Main {
       ).foreach(row => {
         val userId = row.getInt(0)
         val items = row.getList(1).toArray()
-        val ratings = row.getList(2).toArray()
 
-        val relevant = items.zip(ratings).filter(
-          _._2.asInstanceOf[Double] >= 4
-        ).map(_._1.asInstanceOf[Int]).toSet
+        val relevant = items.map(_.asInstanceOf[Int]).toSet
 
         val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
         val selected = recSys.topKItemsForUser(user)
