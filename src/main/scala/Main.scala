@@ -249,14 +249,14 @@ object Main {
     })
   }
 
-  def sequentialTopKCrossValidation(spark: SparkSession, topK: Int): Seq[Double] = {
-    val recsys = new TopKSequentialRecommender().setGridSize(
+  def sequentialTopKCrossValidation(spark: SparkSession, topK: Int): Seq[(Double, Double)] = {
+    val recSys = new TopKSequentialRecommender().setGridSize(
       3, 3
     ).setNumberItems(1682).setMinParamsApriori(
       0.01, 0.9
     ).setMinParamsSequential(
       0.01, 0.9
-    ).setPeriods(5).setK(5)
+    ).setPeriods(5).setK(topK)
 
     val predictions_accumulator1 = new ListBufferAccumulator[Double]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
@@ -282,25 +282,29 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recsys.fit(train)
+      recSys.fit(train)
 
       test.groupBy("user_id").agg(
         collect_list(col("item_id")).as("items"),
       ).foreach(row => {
         val userId = row.getInt(0)
         val items = row.getList(1).toArray()
-        val ratings = row.getList(2).toArray()
 
-        val selected = recsys.transform(
+        val relevant = items.map(_.asInstanceOf[Int]).toSet
+
+        val selected = recSys.transform(
           train.filter(col("user_id") === userId)
         )
 
         accumulator.add(
-          new TopKMetrics(k = 5, selected, relevant).getPrecision
+          new TopKMetrics(k = topK, selected, relevant).getPrecision
         )
       }: Unit)
 
-      accumulator.value.sum / accumulator.value.length
+      val coverageRecommendations = accumulator.value.count(_ > 0.0).toDouble / accumulator.value.length.toDouble
+      val map = accumulator.value.filter(_ > 0.0).sum / accumulator.value.count(_ > 0.0)
+
+      (map, coverageRecommendations)
     })
   }
 
@@ -316,26 +320,16 @@ object Main {
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
+/*
     val timePeriods = Seq(
       (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
       (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
       (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
     )
+*/
+    val results = sequentialTopKCrossValidation(spark, 5)
 
-    val recsys = new TopKSequentialRecommender().setGridSize(
-      3, 3
-    ).setNumberItems(1682).setMinParamsApriori(
-      0.01, 0.9
-    ).setMinParamsSequential(
-      0.01, 0.9
-    ).setPeriods(5)
-
-    val train = dataset("data/train-fold1.csv")
-//    val test = dataset("data/test-fold1.csv")
-
-    recsys.fit(train)
-
-    println(recsys.transform(train.filter(col("user_id") === 15)))
+    println(results)
 
     spark.stop()
   }
