@@ -11,6 +11,7 @@ import com.github.nscala_time.time.Imports._
 import scala.collection.mutable.ListBuffer
 
 class TopKSequentialRecommender extends Serializable {
+  private var _k: Int = 5
   private var _numberItems: Long = -1
   private var _userItemDf: DataFrame = null
   private var _transactionDf: DataFrame = null
@@ -27,6 +28,11 @@ class TopKSequentialRecommender extends Serializable {
   private var _minConfidenceApriori: Double = 0.0
   private var _minSupportSequential: Double = 0.0
   private var _minConfidenceSequential: Double = 0.0
+
+  def setK(kItems: Int): this.type = {
+    this._k = kItems
+    this
+  }
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
@@ -126,7 +132,7 @@ class TopKSequentialRecommender extends Serializable {
           !previouslyItems.contains(row.getInt(0))
         }).orderBy(
           col("count").desc
-        ).select("items").head(5).map(_.getInt(0)).toSet
+        ).select("items").head(this._k).map(_.getInt(0)).toSet
       }
     }
   }

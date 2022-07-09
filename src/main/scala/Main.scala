@@ -249,6 +249,61 @@ object Main {
     })
   }
 
+  def sequentialTopKCrossValidation(spark: SparkSession, topK: Int): Seq[Double] = {
+    val recsys = new TopKSequentialRecommender().setGridSize(
+      3, 3
+    ).setNumberItems(1682).setMinParamsApriori(
+      0.01, 0.9
+    ).setMinParamsSequential(
+      0.01, 0.9
+    ).setPeriods(5).setK(5)
+
+    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      recsys.fit(train)
+
+      test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+      ).foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val selected = recsys.transform(
+          train.filter(col("user_id") === userId)
+        )
+
+        accumulator.add(
+          new TopKMetrics(k = 5, selected, relevant).getPrecision
+        )
+      }: Unit)
+
+      accumulator.value.sum / accumulator.value.length
+    })
+  }
+
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master(
       "local[*]"
