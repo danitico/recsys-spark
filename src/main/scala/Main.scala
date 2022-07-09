@@ -1,7 +1,7 @@
 import scala.math.{pow, sqrt}
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{col, collect_list, from_unixtime, to_timestamp}
+import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.TopKMetrics
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
@@ -273,17 +273,17 @@ object Main {
     val recsys = new TopKSequentialRecommender().setGridSize(
       3, 3
     ).setNumberItems(1682).setMinParamsApriori(
-      0.05, 0.75
+      0.01, 0.9
     ).setMinParamsSequential(
-      0.05, 0.75
-    ).setPeriods(2)
+      0.01, 0.9
+    ).setPeriods(5)
 
     val train = dataset("data/train-fold1.csv")
-    val test = dataset("data/test-fold1.csv")
+//    val test = dataset("data/test-fold1.csv")
 
     recsys.fit(train)
 
-    println(recsys.transform(train.where("user_id == 11")))
+    println(recsys.transform(train.filter(col("user_id") === 15)))
 
     spark.stop()
   }

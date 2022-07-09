@@ -2,7 +2,7 @@ package recommender.sequential
 
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.fpm.FPGrowth
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, sum, udf, when, window}
 import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import som.{SOM, SOMModel}
@@ -79,7 +79,6 @@ class TopKSequentialRecommender extends Serializable {
     // Cluster transactions of each customer segment using SOM
     this.clusterTransactions()
 
-    println("Generando reglas")
     // Generating sequential rules as in CMRULES
     this.obtainRules()
   }
@@ -101,13 +100,14 @@ class TopKSequentialRecommender extends Serializable {
         row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
       })
 
-      val transactionsAtT = this._transactionDf.where(
-        s"transaction_cluster == $desiredConsequent"
-      ).where(
-        s"period_id == ${this._periodsIds.last}"
+      val transactionsAtT = this._transactionDf.filter(
+        col("transaction_cluster") === desiredConsequent
+      ).filter(
+        col("period_id") === this._periodsIds.last
       )
 
-      if (transactionsAtT.isEmpty) {
+
+      if (transactionsAtT.rdd.isEmpty()) {
         Set()
       } else {
         val previouslyItems = transactionsUser.select(
@@ -120,9 +120,7 @@ class TopKSequentialRecommender extends Serializable {
         ).drop("features").withColumn(
           "items",
           explode(col("items"))
-        ).groupBy("items").count().where(
-          "count > 0"
-        )
+        ).groupBy("items").count().filter(col("count") > 0)
 
         candidates.filter(row => {
           !previouslyItems.contains(row.getInt(0))
@@ -210,13 +208,15 @@ class TopKSequentialRecommender extends Serializable {
     val rulesWithScore = this._rules.withColumn(
       "score",
       getScore(col("antecedent"), col("support"), col("confidence"))
-    )
-    val filteredRules = rulesWithScore.where("score > 0")
+    ).filter(col("score") > 0).cache()
 
-    if (filteredRules.isEmpty) {
+    // Workaround to speed up the process of checking if the dataframe is empty when a huge set of rules is created
+    val sumScore: Option[Double] = Some(rulesWithScore.agg(sum("score").as("sum_score")).head().getDouble(0))
+
+    if (sumScore.getOrElse(0.0) == 0.0) {
       -1
     } else {
-      filteredRules.orderBy(
+      rulesWithScore.orderBy(
         col("score").desc
       ).select(
         "consequent"
@@ -486,7 +486,6 @@ class TopKSequentialRecommender extends Serializable {
     ).setSeed(42L).fit(this._transactionDf)
 
     this._transactionDf = this._transactionModel.transform(this._transactionDf)
-    this._transactionDf.show(50)
   }
 
   private def obtainRules(): Unit = {
@@ -562,8 +561,6 @@ class TopKSequentialRecommender extends Serializable {
       "confidence", "lift", "support"
     ).distinct()
 
-    rules.show(200)
-
     // Solving support and confidence for the new set of rules
     val numberOfTransactions = transactions.count()
     val transactionsArray = transactions.select("items").collect().map(_.getList(0).toArray())
@@ -594,13 +591,11 @@ class TopKSequentialRecommender extends Serializable {
       col("support") / col("support_antecedent")
     ).drop("XY", "support_antecedent")
 
-    sequentialRules.show(200)
-
     // filter sequential rules with min support and confidence
-    this._rules = sequentialRules.where(
-      s"support > ${this._minSupportSequential}"
-    ).where(
-      s"confidence > ${this._minConfidenceSequential}"
-    )
+    this._rules = sequentialRules.filter(
+      col("support") > this._minSupportSequential
+    ).filter(
+      col("confidence") > this._minConfidenceSequential
+    ).cache()
   }
 }
