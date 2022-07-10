@@ -216,10 +216,7 @@ class TopKSequentialRecommender extends Serializable {
       getScore(col("antecedent"), col("support"), col("confidence"))
     ).filter(col("score") > 0).cache()
 
-    // Workaround to speed up the process of checking if the dataframe is empty when a huge set of rules is created
-    val sumScore: Option[Double] = Some(rulesWithScore.agg(sum("score").as("sum_score")).head().getDouble(0))
-
-    if (sumScore.getOrElse(0.0) == 0.0) {
+    if (rulesWithScore.rdd.isEmpty()) {
       -1
     } else {
       rulesWithScore.orderBy(

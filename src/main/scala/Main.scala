@@ -258,15 +258,15 @@ object Main {
       0.01, 0.9
     ).setPeriods(5).setK(topK)
 
-    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Boolean)]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
-    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Boolean)]
     spark.sparkContext.register(predictions_accumulator2, "predictions2")
-    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Boolean)]
     spark.sparkContext.register(predictions_accumulator3, "predictions3")
-    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Boolean)]
     spark.sparkContext.register(predictions_accumulator4, "predictions4")
-    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Boolean)]
     spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
     Seq(1, 2, 3, 4, 5).map(index => {
@@ -284,9 +284,11 @@ object Main {
 
       recSys.fit(train)
 
-      test.groupBy("user_id").agg(
+      val testData = test.groupBy("user_id").agg(
         collect_list(col("item_id")).as("items"),
-      ).foreach(row => {
+      ).collect()
+
+      testData.foreach(row => {
         val userId = row.getInt(0)
         val items = row.getList(1).toArray()
 
@@ -296,15 +298,19 @@ object Main {
           train.filter(col("user_id") === userId)
         )
 
-        accumulator.add(
-          new TopKMetrics(k = topK, selected, relevant).getPrecision
-        )
+        if (selected.isEmpty) {
+          accumulator.add((0.0, false))
+        } else {
+          val evaluator = new TopKMetrics(k = topK, selected, relevant)
+
+          accumulator.add((evaluator.getPrecision, true))
+        }
       }: Unit)
 
-      val coverageRecommendations = accumulator.value.count(_ > 0.0).toDouble / accumulator.value.length.toDouble
-      val map = accumulator.value.filter(_ > 0.0).sum / accumulator.value.count(_ > 0.0)
+      val coverageRecommendations = accumulator.value.count(_._2 == true).toDouble / accumulator.value.length.toDouble
+      val meanAveragePrecision = accumulator.value.filter(_._2 == true).map(_._1).sum / accumulator.value.count(_._2 == true).toDouble
 
-      (map, coverageRecommendations)
+      (meanAveragePrecision, coverageRecommendations)
     })
   }
 
