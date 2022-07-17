@@ -10,7 +10,8 @@ import com.github.nscala_time.time.Imports._
 
 import scala.collection.mutable.ListBuffer
 
-class TopKSequentialRecommender extends Serializable {
+class SequentialTopKRecommender extends Serializable {
+  private var _k: Int = 5
   private var _numberItems: Long = -1
   private var _userItemDf: DataFrame = null
   private var _transactionDf: DataFrame = null
@@ -27,6 +28,11 @@ class TopKSequentialRecommender extends Serializable {
   private var _minConfidenceApriori: Double = 0.0
   private var _minSupportSequential: Double = 0.0
   private var _minConfidenceSequential: Double = 0.0
+
+  def setK(kItems: Int): this.type = {
+    this._k = kItems
+    this
+  }
 
   def setNumberItems(numberItems: Int): this.type = {
     this._numberItems = numberItems
@@ -83,7 +89,7 @@ class TopKSequentialRecommender extends Serializable {
     this.obtainRules()
   }
 
-  def transform(transactionsUser: DataFrame): Set[Int] = {
+  def transform(transactionsUser: DataFrame): Array[(Int, Double)] = {
     val transactionDf = this.getTransactionDf(transactionsUser)
     val transactionDfWithPeriods = this.transformPeriods(transactionDf)
     val transactionsWithClusters = this._transactionModel.transform(
@@ -94,7 +100,7 @@ class TopKSequentialRecommender extends Serializable {
     val desiredConsequent = this.getMostAppropiateConsequent(items)
 
     if (desiredConsequent == -1) {
-      Set()
+      Array()
     } else {
       val binaryToInt = udf((row: List[Double]) => {
         row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
@@ -108,7 +114,7 @@ class TopKSequentialRecommender extends Serializable {
 
 
       if (transactionsAtT.rdd.isEmpty()) {
-        Set()
+        Array()
       } else {
         val previouslyItems = transactionsUser.select(
           "item_id"
@@ -122,11 +128,21 @@ class TopKSequentialRecommender extends Serializable {
           explode(col("items"))
         ).groupBy("items").count().filter(col("count") > 0)
 
-        candidates.filter(row => {
+        val selectedCandidates = candidates.filter(row => {
           !previouslyItems.contains(row.getInt(0))
         }).orderBy(
           col("count").desc
-        ).select("items").head(5).map(_.getInt(0)).toSet
+        ).select("items", "count").head(this._k).map(candidate => {
+          (candidate.getInt(0), candidate.getInt(1).toDouble)
+        }).sortWith(
+          _._2 > _._2
+        )
+
+        val maxFrequency = selectedCandidates.head._2
+
+        selectedCandidates.map(candidate => {
+          (candidate._1, candidate._2 / maxFrequency)
+        })
       }
     }
   }
@@ -210,10 +226,7 @@ class TopKSequentialRecommender extends Serializable {
       getScore(col("antecedent"), col("support"), col("confidence"))
     ).filter(col("score") > 0).cache()
 
-    // Workaround to speed up the process of checking if the dataframe is empty when a huge set of rules is created
-    val sumScore: Option[Double] = Some(rulesWithScore.agg(sum("score").as("sum_score")).head().getDouble(0))
-
-    if (sumScore.getOrElse(0.0) == 0.0) {
+    if (rulesWithScore.rdd.isEmpty()) {
       -1
     } else {
       rulesWithScore.orderBy(

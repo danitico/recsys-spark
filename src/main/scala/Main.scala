@@ -5,10 +5,11 @@ import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
-import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
-import recommender.collaborative.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
+import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
+import recommender.collaborative.explicit.item_based.ItemBasedRatingRecommender
 import recommender.content.ContentBasedRatingRecommender
-import recommender.sequential.TopKSequentialRecommender
+import recommender.sequential.SequentialTopKRecommender
+import recommender.hybrid.HybridRecommenderTopK
 import similarity._
 
 object Main {
@@ -340,9 +341,26 @@ object Main {
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
-    val results = itemBasedTopKCrossValidation(spark, new CosineSimilarity, 25, 5)
-    println(results)
-    println(results.toList)
+    val timePeriods = Seq(
+      (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
+      (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
+      (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
+    )
+
+    val recsys = new SequentialTopKRecommender().setGridSize(
+      3, 3
+    ).setNumberItems(1682).setMinParamsApriori(
+      0.01, 0.9
+    ).setMinParamsSequential(
+      0.01, 0.9
+    ).setPeriods(5)
+
+    val train = dataset("data/train-fold1.csv")
+//    val test = dataset("data/test-fold1.csv")
+
+    recsys.fit(train)
+
+    println(recsys.transform(train.filter(col("user_id") === 15)))
 
     spark.stop()
   }

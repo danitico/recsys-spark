@@ -1,4 +1,4 @@
-package recommender.collaborative
+package recommender.collaborative.`implicit`
 
 import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
@@ -9,7 +9,7 @@ import similarity.BaseSimilarity
 import scala.collection.mutable.ListBuffer
 
 
-class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
+class ImplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable {
   var _isUserBased: Boolean = isUserBased
   var _matrix: DenseMatrix = null
   var _similarity: BaseSimilarity = null
@@ -18,7 +18,7 @@ class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
     this._similarity = similarityMeasure
   }
 
-  def readDataframe(session: SparkSession, dataframe: DataFrame, numberOfItems: Long): Unit = {
+  def fit(session: SparkSession, dataframe: DataFrame, numberOfItems: Long): Unit = {
     val numberOfUsers = this.getNumberOfUsers(dataframe)
     this._matrix = this.calculateDenseMatrix(session, dataframe, numberOfUsers, numberOfItems)
   }
@@ -52,8 +52,7 @@ class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
     val groupedDf = dataframe.groupBy(
       "item_id"
     ).agg(
-      collect_list(col("user_id")).as("users"),
-      collect_list(col("rating")).as("ratings")
+      collect_list(col("user_id")).as("users")
     ).drop("user_id", "rating")
 
     val notRepresentedItems = this.getNotRepresentedItems(groupedDf, cols)
@@ -61,11 +60,10 @@ class BaseRecommender(isUserBased: Boolean = true) extends Serializable {
 
     groupedDf.foreach((row: Row) => {
       val users = row.getList(1).toArray()
-      val ratings = row.getList(2).toArray()
 
-      users.zip(ratings).foreach(UserRatingTuple => {
-        rowIndices.add(UserRatingTuple._1.asInstanceOf[Int] - 1)
-        values.add(UserRatingTuple._2.asInstanceOf[Double])
+      users.foreach(user => {
+        rowIndices.add(user.asInstanceOf[Int] - 1)
+        values.add(1.0)
       })
 
       colSeparators.add(values.value.length)
