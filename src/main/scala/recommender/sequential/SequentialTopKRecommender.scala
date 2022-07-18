@@ -133,7 +133,7 @@ class SequentialTopKRecommender extends Serializable {
         }).orderBy(
           col("count").desc
         ).select("items", "count").head(this._k).map(candidate => {
-          (candidate.getInt(0), candidate.getInt(1).toDouble)
+          (candidate.getInt(0), candidate.getLong(1).toDouble)
         }).sortWith(
           _._2 > _._2
         )

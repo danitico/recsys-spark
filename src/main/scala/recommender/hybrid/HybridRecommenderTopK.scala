@@ -65,5 +65,4 @@ class HybridRecommenderTopK extends Serializable {
 
     combination.sortWith(_._2 > _._2).take(this._k).map(_._1).toSet
   }
-
 }

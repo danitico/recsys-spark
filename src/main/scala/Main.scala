@@ -5,6 +5,7 @@ import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
+import recommender.collaborative.`implicit`.user_based.ImplicitUserBasedTopKRecommender
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.explicit.item_based.ItemBasedRatingRecommender
 import recommender.content.ContentBasedRatingRecommender
@@ -331,6 +332,74 @@ object Main {
     })
   }
 
+  def hybridCrossValidation(spark: SparkSession, similarity: BaseSimilarity, topK: Int): Seq[Double] = {
+    val recsys1 = new SequentialTopKRecommender().setGridSize(
+      3, 3
+    ).setNumberItems(1682).setMinParamsApriori(
+      0.01, 0.9
+    ).setMinParamsSequential(
+      0.01, 0.9
+    ).setPeriods(5).setK(topK)
+
+    val recsys2 = new ImplicitUserBasedTopKRecommender(25, topK)
+    recsys2.setSimilarityMeasure(similarity)
+
+    val hybrid = new HybridRecommenderTopK().setCollaborativeFiltering(
+      recsys2
+    ).setSequential(recsys1).setNumberOfItems(1682)
+
+    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      hybrid.fit(train)
+
+      val testData = test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items")
+      ).collect()
+
+      testData.foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+
+        val relevant = items.map(_.asInstanceOf[Int]).toSet
+
+        val selected = hybrid.transform(
+          train.filter(col("user_id") === userId)
+        )
+
+        if (selected.isEmpty) {
+          accumulator.add(0.0)
+        } else {
+          val evaluator = new TopKMetrics(k = topK, selected, relevant)
+          accumulator.add(evaluator.getPrecision)
+        }
+      }: Unit)
+
+      accumulator.value.sum / accumulator.value.length
+    })
+  }
+
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master(
       "local[*]"
@@ -341,26 +410,13 @@ object Main {
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
+/*
     val timePeriods = Seq(
       (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
       (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
       (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
     )
-
-    val recsys = new SequentialTopKRecommender().setGridSize(
-      3, 3
-    ).setNumberItems(1682).setMinParamsApriori(
-      0.01, 0.9
-    ).setMinParamsSequential(
-      0.01, 0.9
-    ).setPeriods(5)
-
-    val train = dataset("data/train-fold1.csv")
-//    val test = dataset("data/test-fold1.csv")
-
-    recsys.fit(train)
-
-    println(recsys.transform(train.filter(col("user_id") === 15)))
+*/
 
     spark.stop()
   }
