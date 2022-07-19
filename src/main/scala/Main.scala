@@ -3,7 +3,7 @@ import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructFiel
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
-import metrics.TopKMetrics
+import metrics.RankingMetrics
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
 import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.item_based.ItemBasedRatingRecommender
@@ -181,7 +181,7 @@ object Main {
         val selected = recSys.topKItemsForUser(user)
 
         accumulator.add(
-          new TopKMetrics(k = 5, selected, relevant).getPrecision
+          new RankingMetrics(k = 5, selected, relevant).getPrecision
         )
       }: Unit)
 
