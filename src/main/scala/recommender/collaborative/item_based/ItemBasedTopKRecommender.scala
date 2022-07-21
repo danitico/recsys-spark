@@ -46,7 +46,7 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
     numerator/denominator
   }
 
-  def topKItemsForUser(targetUser: Array[Double], user: Int): List[(Int, Double)] = {
+  def topKItemsForUser(targetUser: Array[Double], user: Int): Set[Int] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
     val itemsRatings = this._matrix.rowIter.zipWithIndex.filter(f => {
       unratedItems.contains(f._2)
@@ -62,6 +62,6 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
 
         (g._2 + 1, rating)
       }
-    }).toArray.sortBy(- _._2).take(this._kRecommendedItems).toList
+    }).toArray.sortWith(_._2 > _._2).map(_._1).take(this._kRecommendedItems).toSet
   }
 }
