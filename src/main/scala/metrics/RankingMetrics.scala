@@ -21,7 +21,11 @@ class RankingMetrics extends Serializable {
   }
 
   private def getRecall: Double = {
-    this._selected.intersect(this._relevant).size / this._relevant.size.toDouble
+    if (this._relevant.isEmpty) {
+      0.0
+    } else {
+      this._selected.intersect(this._relevant).size / this._relevant.size.toDouble
+    }
   }
 
   private def getAveragePrecision: Double = {
