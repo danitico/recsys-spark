@@ -5,6 +5,7 @@ import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
 import org.apache.spark.ml.linalg.SparseVector
+import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
 import recommender.content.ContentBasedRatingRecommender
@@ -126,7 +127,7 @@ object Main {
         val users = row.getList(1).toArray()
         val ratings = row.getList(2).toArray()
 
-        val item = recSysItemBased._matrixRows.slice(itemId - 1, itemId).toList.head.toArray
+        val item = recSysItemBased._matrixRows.slice(itemId - 1, itemId).head.toArray
         users.zip(ratings).foreach(a => {
           val prediction = recSysItemBased.transform(
             item, a._1.asInstanceOf[Int]
@@ -185,7 +186,7 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrixRows.slice(userId - 1, userId).toList.head.toArray
+        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
         val selected = recSys.transform(user)
 
         accumulator.add(
@@ -331,31 +332,26 @@ object Main {
     })
   }
 
-  def hybridCrossValidation(spark: SparkSession, similarity: BaseSimilarity, topK: Int): Seq[Double] = {
-    val recsys1 = new SequentialTopKRecommender().setGridSize(
-      3, 3
-    ).setNumberItems(1682).setMinParamsApriori(
-      0.01, 0.9
-    ).setMinParamsSequential(
-      0.01, 0.9
-    ).setPeriods(5).setK(topK)
-
-    val recsys2 = new UserBasedTopKRecommender(25, topK)
-    recsys2.setSimilarityMeasure(similarity)
+  def hybridCrossValidation(cf: ExplicitBaseRecommender, sequential: SequentialTopKRecommender, numberOfItems: Int, topK: Int): Seq[(Double, Double, Double)] = {
+    val spark = SparkSession.getActiveSession.orNull
 
     val hybrid = new HybridRecommenderTopK().setCF(
-      recsys2
-    ).setSequential(recsys1).setNumberOfItems(1682)
+      cf
+    ).setSequential(
+      sequential
+    ).setNumberOfItems(
+      numberOfItems
+    )
 
-    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
-    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator2, "predictions2")
-    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator3, "predictions3")
-    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator4, "predictions4")
-    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
     Seq(1, 2, 3, 4, 5).map(index => {
@@ -374,28 +370,39 @@ object Main {
       hybrid.fit(train)
 
       val testData = test.groupBy("user_id").agg(
-        collect_list(col("item_id")).as("items")
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
       ).collect()
 
       testData.foreach(row => {
         val userId = row.getInt(0)
         val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
 
-        val relevant = items.map(_.asInstanceOf[Int]).toSet
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
 
         val selected = hybrid.transform(
           train.filter(col("user_id") === userId)
         )
 
-        if (selected.isEmpty) {
-          accumulator.add(0.0)
-        } else {
-          val evaluator = new TopKMetrics(k = topK, selected, relevant)
-          accumulator.add(evaluator.getPrecision)
-        }
+        accumulator.add(
+          new RankingMetrics(k = topK, selected.map(_._1).toSet, relevant).getRankingMetrics
+        )
       }: Unit)
 
-      accumulator.value.sum / accumulator.value.length
+      val metricPerUser = accumulator.value
+      val sumMetrics = metricPerUser.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+      val finalMetrics = (
+        sumMetrics._1 / metricPerUser.length,
+        sumMetrics._2 / metricPerUser.length,
+        sumMetrics._3 / metricPerUser.length
+      )
+      println(finalMetrics)
+      finalMetrics
     })
   }
 
@@ -404,18 +411,27 @@ object Main {
       "local[*]"
     ).config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
+    ).config(
+      "spark.jars", "/home/daniel/Desktop/recommendations/lib/sparkml-som_2.12-0.2.1.jar"
     ).appName(
       "TFM"
     ).getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    //spark.sparkContext.setLogLevel("WARN")
 
-/*
-    val timePeriods = Seq(
-      (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
-      (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
-      (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
-    )
-*/
+    val topK = 5
+    val recSys1 = new ItemBasedTopKRecommender(25, topK)
+    recSys1.setSimilarityMeasure(new EuclideanSimilarity)
+
+    val recSys2 = new SequentialTopKRecommender().setGridSize(
+      3, 3
+    ).setNumberItems(1682).setMinParamsApriori(
+      0.01, 0.95
+    ).setMinParamsSequential(
+      0.01, 0.95
+    ).setPeriods(5).setK(topK)
+
+    val results = hybridCrossValidation(recSys1, recSys2, 1682, topK)
+    println(results)
 
     spark.stop()
   }

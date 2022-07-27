@@ -232,7 +232,7 @@ class SequentialTopKRecommender extends Serializable {
   }
 
   private def getTransactionDf(train: DataFrame): DataFrame = {
-    // Group dataset by user and tiemstamp
+    // Group dataset by user and timestamp
     val groupedByUserAndTimeStamp = train.groupBy("user_id", "timestamp").agg(
       collect_list(col("item_id")).as("items")
     )
@@ -395,7 +395,7 @@ class SequentialTopKRecommender extends Serializable {
 
   private def clusterTransactions(): Unit = {
     // a SOM is run to get the groups of transactions
-    this._transactionModel = new SOM().setMaxIter(10).setHeight(
+    this._transactionModel = new SOM().setMaxIter(5).setHeight(
       this._heightGridSom
     ).setWidth(
       this._widthGridSom

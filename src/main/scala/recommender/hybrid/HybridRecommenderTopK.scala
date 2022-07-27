@@ -1,7 +1,7 @@
 package recommender.hybrid
 
 import org.apache.spark.ml.linalg.Vectors
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.DataFrame
 import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.sequential.SequentialTopKRecommender
 
@@ -19,13 +19,13 @@ class HybridRecommenderTopK extends Serializable {
     this
   }
 
-  def setCF(recsys: ExplicitBaseRecommender): this.type = {
-    this.collaborativeFiltering = recsys
+  def setCF(recSys: ExplicitBaseRecommender): this.type = {
+    this.collaborativeFiltering = recSys
     this
   }
 
-  def setSequential(recsys: SequentialTopKRecommender): this.type = {
-    this.sequential = recsys
+  def setSequential(recSys: SequentialTopKRecommender): this.type = {
+    this.sequential = recSys
     this
   }
 
@@ -37,7 +37,7 @@ class HybridRecommenderTopK extends Serializable {
     this.sequential.fit(train)
   }
 
-  def transform(test: DataFrame): Set[Int] = {
+  def transform(test: DataFrame): Seq[(Int, Double)] = {
     val predictionsSequential = this.sequential.transform(
       test
     ).map(element => {
@@ -47,7 +47,7 @@ class HybridRecommenderTopK extends Serializable {
     val explicitArray = Vectors.sparse(
       this.numberOfItems,
       test.select("item_id", "rating").collect().map(row => {
-        (row.getInt(0) - 1, 1.0)
+        (row.getInt(0) - 1, row.getInt(1).toDouble)
       })
     ).toDense.toArray
 
@@ -61,6 +61,6 @@ class HybridRecommenderTopK extends Serializable {
       _.map(_._2).sum
     ).toArray
 
-    combination.sortWith(_._2 > _._2).take(this._k).map(_._1).toSet
+    combination.sortWith(_._2 > _._2).take(this._k)
   }
 }
