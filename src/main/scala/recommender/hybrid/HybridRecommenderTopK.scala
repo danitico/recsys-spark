@@ -2,11 +2,11 @@ package recommender.hybrid
 
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import recommender.collaborative.`implicit`.user_based.ImplicitUserBasedTopKRecommender
+import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.sequential.SequentialTopKRecommender
 
 class HybridRecommenderTopK extends Serializable {
-  var collaborativeFiltering: ImplicitUserBasedTopKRecommender = null
+  var collaborativeFiltering: ExplicitBaseRecommender = null
   var sequential: SequentialTopKRecommender = null
   var numberOfItems: Int = 0
   var _k: Int = 5
@@ -19,7 +19,7 @@ class HybridRecommenderTopK extends Serializable {
     this
   }
 
-  def setCollaborativeFiltering(recsys: ImplicitUserBasedTopKRecommender): this.type = {
+  def setCF(recsys: ExplicitBaseRecommender): this.type = {
     this.collaborativeFiltering = recsys
     this
   }
@@ -30,10 +30,8 @@ class HybridRecommenderTopK extends Serializable {
   }
 
   def fit(train: DataFrame): Unit = {
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-
     this.collaborativeFiltering.fit(
-      session, train, this.numberOfItems
+      train, this.numberOfItems
     )
 
     this.sequential.fit(train)
@@ -46,16 +44,16 @@ class HybridRecommenderTopK extends Serializable {
       (element._1, element._2 * this._weightSequential)
     })
 
-    val implicitArray = Vectors.sparse(
+    val explicitArray = Vectors.sparse(
       this.numberOfItems,
-      test.select("item_id").collect().map(row => {
+      test.select("item_id", "rating").collect().map(row => {
         (row.getInt(0) - 1, 1.0)
       })
     ).toDense.toArray
 
     val predictionsCF = this.collaborativeFiltering.transform(
-      implicitArray
-    )map(element => {
+      explicitArray
+    ).map(element => {
       (element._1, element._2 * this._weightCf)
     })
 

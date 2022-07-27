@@ -9,6 +9,7 @@ import scala.math.abs
 class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends ExplicitBaseRecommender(isUserBased = false){
   protected var _kSimilarItems: Int = kSimilarItems
   protected var _kRecommendedItems: Int = kRecommendedItems
+  protected var _ratingsOfItemsRatedByUser: List[(Vector, Int)] = null
 
   def setNumberSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k
@@ -18,27 +19,27 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
     this._kRecommendedItems = k
   }
 
-  protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
-    val itemsWithRating = this._matrix.rowIter.filter(_(user) > 0).toList
-
-    if (itemsWithRating.isEmpty) {
+  protected def getKSimilarItems(targetItem: Array[Double]): List[(Double, Int)] = {
+    if (this._ratingsOfItemsRatedByUser.isEmpty) {
       return List()
     }
 
-    val correlations = itemsWithRating.map(
-      f => this._similarity.getSimilarity(targetItem, f.toArray)
+    val correlations = this._ratingsOfItemsRatedByUser.map(
+      f => this._similarity.getSimilarity(targetItem, f._1.toArray)
     )
 
     if (correlations.forall(_.isNaN)) {
       return List()
     }
 
-    correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kSimilarItems)
+    correlations.zip(this._ratingsOfItemsRatedByUser).map{
+      case (a, (b, c)) => (a, c)
+    }.sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Vector)], user: Int): Double = {
+  protected def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
-      a._1 * a._2(user)
+      a._1 * targetUser(a._2)
     }).sum
 
     val denominator = topKItems.map(_._1).reduce(abs(_) + abs(_))
@@ -46,22 +47,27 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
     numerator/denominator
   }
 
-  def topKItemsForUser(targetUser: Array[Double], user: Int): Set[Int] = {
+  override def transform(targetUser: Array[Double]): Seq[(Int, Double)] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
-    val itemsRatings = this._matrix.rowIter.zipWithIndex.filter(f => {
-      unratedItems.contains(f._2)
-    }).toList
 
-    itemsRatings.map(g => {
-      val similarItems = this.getKSimilarItems(g._1.toArray, user - 1)
+    this._ratingsOfItemsRatedByUser = this._matrixRows.zipWithIndex.filter(f => {
+      !unratedItems.contains(f._2)
+    }).map(f => (f._1, f._2 + 1))
+
+    val ratingsOfItemsNotRatedByUser = this._matrixRows.zipWithIndex.filter(f => {
+      unratedItems.contains(f._2)
+    }).map(f => (f._1, f._2 + 1))
+
+    ratingsOfItemsNotRatedByUser.map(g => {
+      val similarItems = this.getKSimilarItems(g._1.toArray)
 
       if (similarItems.isEmpty) {
-        (g._2 + 1, 0.0)
+        (g._2, 0.0)
       } else {
-        val rating = this.ratingCalculation(similarItems, user - 1)
+        val rating = this.ratingCalculation(similarItems, targetUser)
 
-        (g._2 + 1, rating)
+        (g._2, rating)
       }
-    }).toArray.sortWith(_._2 > _._2).map(_._1).take(this._kRecommendedItems).toSet
+    }).toArray.sortBy(- _._2).take(this._kRecommendedItems).toSeq
   }
 }

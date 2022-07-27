@@ -1,19 +1,16 @@
 package recommender.sequential
 
-import accumulator.ListBufferAccumulator
 import org.apache.spark.ml.fpm.FPGrowth
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, sum, udf, when, window}
-import org.apache.spark.ml.linalg.{SparseMatrix, Vectors}
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
+import org.apache.spark.ml.linalg.Vectors
+import org.apache.spark.sql.DataFrame
 import som.{SOM, SOMModel}
 import com.github.nscala_time.time.Imports._
 
-import scala.collection.mutable.ListBuffer
 
 class SequentialTopKRecommender extends Serializable {
   private var _k: Int = 5
   private var _numberItems: Long = -1
-  private var _userItemDf: DataFrame = null
   private var _transactionDf: DataFrame = null
   private var _transactionModel: SOMModel = null
   private var _periodRanges: Seq[(Long, String, String)] = null
@@ -73,9 +70,6 @@ class SequentialTopKRecommender extends Serializable {
   }
 
   def fit(train: DataFrame): Unit = {
-    // Get user-item matrix to cluster customers
-    this._userItemDf = this.getUserItemDf(train)
-
     // Get transactions per user and timestamp. Coding bought products as a binary vector
     this._transactionDf = this.getTransactionDf(train)
 
@@ -224,7 +218,7 @@ class SequentialTopKRecommender extends Serializable {
     val rulesWithScore = this._rules.withColumn(
       "score",
       getScore(col("antecedent"), col("support"), col("confidence"))
-    ).filter(col("score") > 0).cache()
+    ).filter(col("score") > 0)
 
     if (rulesWithScore.rdd.isEmpty()) {
       -1
@@ -235,93 +229,6 @@ class SequentialTopKRecommender extends Serializable {
         "consequent"
       ).first().getList(0).toArray.head.asInstanceOf[String].split("_").head.toInt
     }
-  }
-
-  private def getUserItemDf(dataframe: DataFrame): DataFrame = {
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-    import session.implicits._
-
-    val groupedDf = dataframe.groupBy(
-      "item_id"
-    ).agg(
-      collect_list(col("user_id")).as("users"),
-      collect_list(col("rating")).as("ratings")
-    ).drop("user_id", "rating")
-
-    val notRepresentedItems = this.getNotRepresentedItems(groupedDf)
-    val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators
-
-    groupedDf.foreach((row: Row) => {
-      val users = row.getList(1).toArray()
-      val ratings = row.getList(2).toArray()
-
-      users.zip(ratings).foreach(UserRatingTuple => {
-        rowIndices.add(UserRatingTuple._1.asInstanceOf[Int] - 1)
-        values.add(UserRatingTuple._2.asInstanceOf[Double])
-      })
-
-      colSeparators.add(values.value.length)
-    })
-
-    val separators: ListBuffer[Long] = 0.toLong +: colSeparators.value
-
-    notRepresentedItems.foreach(index => {
-      separators.insert(
-        index - 1,
-        separators(index - 1)
-      )
-    })
-
-    val numberOfUsers = this.getNumberOfUsers(dataframe)
-
-    val sparse = new SparseMatrix(
-      numRows = numberOfUsers.toInt,
-      numCols = this._numberItems.toInt,
-      colPtrs = separators.toArray.map(_.toInt),
-      rowIndices = rowIndices.value.toArray.map(_.toInt),
-      values = values.value.toArray
-    )
-
-    val matrixRows = sparse.toDense.rowIter.toSeq.map(_.toArray)
-
-    val df = session.sparkContext.parallelize(
-      matrixRows
-    ).toDF(
-      "features"
-    ).withColumn("rowId1", monotonically_increasing_id())
-
-    val ids = dataframe.select("user_id").distinct().orderBy("user_id").withColumn(
-      "rowId2", monotonically_increasing_id()
-    )
-
-    df.join(ids, df("rowId1") === ids("rowId2"), "inner").drop("rowId1", "rowId2")
-  }
-
-  private def getNumberOfUsers(dataframe: DataFrame): Long = {
-    dataframe.select("user_id").distinct().count()
-  }
-
-  private def getNotRepresentedItems(groupedDf: DataFrame): Seq[Int] = {
-    val everyItem = Range.inclusive(1, this._numberItems.toInt).toSet
-    val actualItems = groupedDf.select(
-      "item_id"
-    ).collect().map(_.getInt(0)).toSet
-
-    everyItem.diff(actualItems).toSeq.sorted
-  }
-
-  private def createAndRegisterAccumulators: (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
-    val session: SparkSession = SparkSession.getActiveSession.orNull
-
-    val rowIndices = new ListBufferAccumulator[Long]
-    val colSeparators = new ListBufferAccumulator[Long]
-    val values = new ListBufferAccumulator[Double]
-
-    session.sparkContext.register(rowIndices, "ratings")
-    session.sparkContext.register(colSeparators, "col_separator")
-    session.sparkContext.register(values, "row_indices")
-
-    (rowIndices, colSeparators, values)
   }
 
   private def getTransactionDf(train: DataFrame): DataFrame = {
@@ -609,6 +516,6 @@ class SequentialTopKRecommender extends Serializable {
       col("support") > this._minSupportSequential
     ).filter(
       col("confidence") > this._minConfidenceSequential
-    ).cache()
+    )
   }
 }

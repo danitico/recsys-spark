@@ -1,7 +1,7 @@
 package recommender.collaborative.explicit
 
 import accumulator.ListBufferAccumulator
-import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
+import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix, Vector}
 import org.apache.spark.sql.functions.{col, collect_list}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import similarity.BaseSimilarity
@@ -11,16 +11,24 @@ import scala.collection.mutable.ListBuffer
 
 class ExplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable {
   var _isUserBased: Boolean = isUserBased
-  var _matrix: DenseMatrix = null
+  var _matrixRows: List[Vector] = null
   var _similarity: BaseSimilarity = null
 
   def setSimilarityMeasure(similarityMeasure: BaseSimilarity): Unit = {
     this._similarity = similarityMeasure
   }
 
-  def readDataframe(session: SparkSession, dataframe: DataFrame, numberOfItems: Long): Unit = {
+  def fit(dataframe: DataFrame, numberOfItems: Long): Unit = {
     val numberOfUsers = this.getNumberOfUsers(dataframe)
-    this._matrix = this.calculateDenseMatrix(session, dataframe, numberOfUsers, numberOfItems)
+    this._matrixRows = this.calculateDenseMatrix(dataframe, numberOfUsers, numberOfItems)
+  }
+
+  def transform(target: Array[Double], index: Int): Double = {
+    0.0
+  }
+
+  def transform(target: Array[Double]): Seq[(Int, Double)] = {
+    Seq()
   }
 
   protected def getNumberOfUsers(dataframe: DataFrame): Long = {
@@ -36,10 +44,12 @@ class ExplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable 
     everyItem.diff(actualItems).toSeq.sorted
   }
 
-  protected def createAndRegisterAccumulators(session: SparkSession): (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
+  protected def createAndRegisterAccumulators(): (ListBufferAccumulator[Long], ListBufferAccumulator[Long], ListBufferAccumulator[Double]) = {
     val rowIndices = new ListBufferAccumulator[Long]
     val colSeparators = new ListBufferAccumulator[Long]
     val values = new ListBufferAccumulator[Double]
+
+    val session: SparkSession = SparkSession.getActiveSession.orNull
 
     session.sparkContext.register(rowIndices, "ratings")
     session.sparkContext.register(colSeparators, "col_separator")
@@ -48,7 +58,7 @@ class ExplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable 
     (rowIndices, colSeparators, values)
   }
 
-  protected def calculateDenseMatrix(session: SparkSession, dataframe: DataFrame, rows: Long, cols: Long): DenseMatrix = {
+  protected def calculateDenseMatrix(dataframe: DataFrame, rows: Long, cols: Long): List[Vector] = {
     val groupedDf = dataframe.groupBy(
       "item_id"
     ).agg(
@@ -57,7 +67,7 @@ class ExplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable 
     ).drop("user_id", "rating")
 
     val notRepresentedItems = this.getNotRepresentedItems(groupedDf, cols)
-    val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators(session)
+    val (rowIndices, colSeparators, values) = this.createAndRegisterAccumulators()
 
     groupedDf.foreach((row: Row) => {
       val users = row.getList(1).toArray()
@@ -89,9 +99,9 @@ class ExplicitBaseRecommender(isUserBased: Boolean = true) extends Serializable 
     )
 
     if (this._isUserBased) {
-      sparse.toDense
+      sparse.toDense.rowIter.toList
     } else {
-      sparse.transpose.toDense
+      sparse.transpose.toDense.rowIter.toList
     }
   }
 }

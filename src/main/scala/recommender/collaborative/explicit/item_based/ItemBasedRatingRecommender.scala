@@ -13,7 +13,7 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends ExplicitBaseRecomme
   }
 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
-    val itemsWithRating = this._matrix.rowIter.filter(_(user) > 0).toList
+    val itemsWithRating = this._matrixRows.filter(_(user) > 0)
 
     if (itemsWithRating.isEmpty) {
       return List()
@@ -40,7 +40,7 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends ExplicitBaseRecomme
     numerator/denominator
   }
 
-  def predictionRatingItem(targetItem: Array[Double], user: Int): Double = {
+  override def transform(targetItem: Array[Double], user: Int): Double = {
     val topKItems = this.getKSimilarItems(targetItem, user - 1)
 
     if (topKItems.isEmpty) {

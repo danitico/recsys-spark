@@ -12,7 +12,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
   }
 
   protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
-    val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
+    val usersWithRating = this._matrixRows.filter(_(item) > 0)
 
     if (usersWithRating.isEmpty) {
       return List()
@@ -43,7 +43,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
     ratingMean + (numerator/denominator)
   }
 
-  def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
+  override def transform(targetUser: Array[Double], item: Int): Double = {
     val ratedItems = targetUser.filter(_ > 0)
     val ratingMean = ratedItems.sum / ratedItems.length
 

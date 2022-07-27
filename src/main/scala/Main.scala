@@ -62,7 +62,7 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recSysUserBased.readDataframe(spark, train, 1682)
+      recSysUserBased.fit(train, 1682)
 
       test.groupBy("user_id").agg(
         collect_list(col("item_id")).as("items"),
@@ -72,9 +72,9 @@ object Main {
         val items = row.getList(1).toArray()
         val ratings = row.getList(2).toArray()
 
-        val item = recSysUserBased._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
+        val item = recSysUserBased._matrixRows.slice(userId - 1, userId).head.toArray
         items.zip(ratings).foreach(a => {
-          val prediction = recSysUserBased.predictionRatingItem(
+          val prediction = recSysUserBased.transform(
             item, a._1.asInstanceOf[Int]
           )
 
@@ -117,7 +117,7 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recSysItemBased.readDataframe(spark, train, 1682)
+      recSysItemBased.fit(train, 1682)
 
       test.groupBy("item_id").agg(
         collect_list(col("user_id")).as("users"),
@@ -127,9 +127,9 @@ object Main {
         val users = row.getList(1).toArray()
         val ratings = row.getList(2).toArray()
 
-        val item = recSysItemBased._matrix.rowIter.slice(itemId - 1, itemId).toList.head.toArray
+        val item = recSysItemBased._matrixRows.slice(itemId - 1, itemId).toList.head.toArray
         users.zip(ratings).foreach(a => {
-          val prediction = recSysItemBased.predictionRatingItem(
+          val prediction = recSysItemBased.transform(
             item, a._1.asInstanceOf[Int]
           )
 
@@ -172,7 +172,7 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recSys.readDataframe(spark, train, 1682)
+      recSys.fit(train, 1682)
 
       test.groupBy("user_id").agg(
         collect_list(col("item_id")).as("items"),
@@ -186,8 +186,8 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
-        val selected = recSys.topKItemsForUser(user)
+        val user = recSys._matrixRows.slice(userId - 1, userId).toList.head.toArray
+        val selected = recSys.transform(user)
 
         accumulator.add(
           new RankingMetrics(k = topK, selected, relevant).getRankingMetrics
@@ -341,10 +341,10 @@ object Main {
       0.01, 0.9
     ).setPeriods(5).setK(topK)
 
-    val recsys2 = new ImplicitUserBasedTopKRecommender(25, topK)
+    val recsys2 = new UserBasedTopKRecommender(25, topK)
     recsys2.setSimilarityMeasure(similarity)
 
-    val hybrid = new HybridRecommenderTopK().setCollaborativeFiltering(
+    val hybrid = new HybridRecommenderTopK().setCF(
       recsys2
     ).setSequential(recsys1).setNumberOfItems(1682)
 
