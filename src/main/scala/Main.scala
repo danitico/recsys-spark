@@ -4,10 +4,9 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
-import org.apache.spark.ml.linalg.{SparseVector, Vectors}
-import recommender.collaborative.`implicit`.user_based.ImplicitUserBasedTopKRecommender
+import org.apache.spark.ml.linalg.SparseVector
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
-import recommender.collaborative.explicit.item_based.ItemBasedRatingRecommender
+import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
 import recommender.content.ContentBasedRatingRecommender
 import recommender.sequential.SequentialTopKRecommender
 import recommender.hybrid.HybridRecommenderTopK
@@ -190,7 +189,7 @@ object Main {
         val selected = recSys.transform(user)
 
         accumulator.add(
-          new RankingMetrics(k = topK, selected, relevant).getRankingMetrics
+          new RankingMetrics(k = topK, selected.map(_._1).toSet, relevant).getRankingMetrics
         )
       }: Unit)
 
@@ -237,7 +236,7 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recSys.readDataframe(spark, train, 1682)
+      recSys.fit(train, 1682)
 
       test.groupBy("user_id").agg(
         collect_list(col("item_id")).as("items"),
@@ -251,11 +250,11 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
-        val selected = recSys.topKItemsForUser(user, userId)
+        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
+        val selected = recSys.transform(user)
 
         accumulator.add(
-          new RankingMetrics(k = topK, selected, relevant).getRankingMetrics
+          new RankingMetrics(k = topK, selected.map(_._1).toSet, relevant).getRankingMetrics
         )
       }: Unit)
 
