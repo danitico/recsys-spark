@@ -3,10 +3,10 @@ import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructFiel
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
-import metrics.TopKMetrics
+import metrics.{PredictionMetrics, RankingMetrics}
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
 import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
-import recommender.collaborative.item_based.ItemBasedRatingRecommender
+import recommender.collaborative.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
 import recommender.content.ContentBasedRatingRecommender
 import recommender.sequential.TopKSequentialRecommender
 import similarity._
@@ -32,7 +32,7 @@ object Main {
     )
   }
 
-  def userBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
+  def userBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[(Double, Double)] = {
     val recSysUserBased = new UserBasedRatingRecommender(k)
     recSysUserBased.setSimilarityMeasure(similarity)
 
@@ -81,11 +81,13 @@ object Main {
         }: Unit)
       }: Unit)
 
-      sqrt(accumulator.value.map(pow(_, 2)).sum / accumulator.value.length)
+      val metrics = new PredictionMetrics(accumulator.value.toArray)
+
+      metrics.getPredictionMetrics
     })
   }
 
-  def itemBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
+  def itemBasedCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[(Double, Double)] = {
     val recSysItemBased = new ItemBasedRatingRecommender(k)
     recSysItemBased.setSimilarityMeasure(similarity)
 
@@ -134,23 +136,25 @@ object Main {
         }: Unit)
       }: Unit)
 
-      sqrt(accumulator.value.map(pow(_, 2)).sum / accumulator.value.length)
+      val metrics = new PredictionMetrics(accumulator.value.toArray)
+
+      metrics.getPredictionMetrics
     })
   }
 
-  def userBasedTopKCrossValidation(spark: SparkSession, similarity: BaseSimilarity, kUsers: Int, topK: Int): Seq[Double] = {
+  def userBasedTopKCrossValidation(spark: SparkSession, similarity: BaseSimilarity, kUsers: Int, topK: Int): Seq[(Double, Double, Double)] = {
     val recSys = new UserBasedTopKRecommender(kUsers, topK)
     recSys.setSimilarityMeasure(similarity)
 
-    val predictions_accumulator1 = new ListBufferAccumulator[Double]
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
-    val predictions_accumulator2 = new ListBufferAccumulator[Double]
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator2, "predictions2")
-    val predictions_accumulator3 = new ListBufferAccumulator[Double]
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator3, "predictions3")
-    val predictions_accumulator4 = new ListBufferAccumulator[Double]
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator4, "predictions4")
-    val predictions_accumulator5 = new ListBufferAccumulator[Double]
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
     spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
     Seq(1, 2, 3, 4, 5).map(index => {
@@ -174,18 +178,95 @@ object Main {
       ).foreach(row => {
         val userId = row.getInt(0)
         val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
 
-        val relevant = items.map(_.asInstanceOf[Int]).toSet
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
 
         val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
         val selected = recSys.topKItemsForUser(user)
 
         accumulator.add(
-          new TopKMetrics(k = 5, selected, relevant).getPrecision
+          new RankingMetrics(k = topK, selected, relevant).getRankingMetrics
         )
       }: Unit)
 
-      accumulator.value.sum / accumulator.value.length
+      val metricPerUser = accumulator.value
+      val sumMetrics = metricPerUser.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      val finalMetrics = (
+        sumMetrics._1 / metricPerUser.length,
+        sumMetrics._2 / metricPerUser.length,
+        sumMetrics._3 / metricPerUser.length
+      )
+      println(finalMetrics)
+      finalMetrics
+    })
+  }
+
+  def itemBasedTopKCrossValidation(spark: SparkSession, similarity: BaseSimilarity, kItems: Int, topK: Int): Seq[(Double, Double, Double)] = {
+    val recSys = new ItemBasedTopKRecommender(kItems, topK)
+    recSys.setSimilarityMeasure(similarity)
+
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      recSys.readDataframe(spark, train, 1682)
+
+      test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
+      ).foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
+
+        val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
+        val selected = recSys.topKItemsForUser(user, userId)
+
+        accumulator.add(
+          new RankingMetrics(k = topK, selected, relevant).getRankingMetrics
+        )
+      }: Unit)
+
+      val metricPerUser = accumulator.value
+      val sumMetrics = metricPerUser.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      (
+        sumMetrics._1 / metricPerUser.length,
+        sumMetrics._2 / metricPerUser.length,
+        sumMetrics._3 / metricPerUser.length
+      )
     })
   }
 
@@ -254,33 +335,14 @@ object Main {
       "local[*]"
     ).config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
-    ).config(
-      "spark.jars", "/home/daniel/Desktop/recommendations/lib/sparkml-som_2.12-0.2.1.jar"
     ).appName(
       "TFM"
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
-    val timePeriods = Seq(
-      (0L, "1997-08-09 02:00:00.0", "1997-10-19 02:00:00.0"),
-      (1L, "1997-10-19 02:00:00.0", "1997-12-29 01:00:00.0"),
-      (2L, "1997-12-29 01:00:00.0", "1998-05-20 02:00:00.0")
-    )
-
-    val recsys = new TopKSequentialRecommender().setGridSize(
-      3, 3
-    ).setNumberItems(1682).setMinParamsApriori(
-      0.01, 0.9
-    ).setMinParamsSequential(
-      0.01, 0.9
-    ).setPeriods(5)
-
-    val train = dataset("data/train-fold1.csv")
-//    val test = dataset("data/test-fold1.csv")
-
-    recsys.fit(train)
-
-    println(recsys.transform(train.filter(col("user_id") === 15)))
+    val results = itemBasedTopKCrossValidation(spark, new CosineSimilarity, 25, 5)
+    println(results)
+    println(results.toList)
 
     spark.stop()
   }
