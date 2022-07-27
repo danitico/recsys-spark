@@ -197,11 +197,13 @@ object Main {
         (a._1 + b._1, a._2 + b._2, a._3 + b._3)
       })
 
-      (
+      val finalMetrics = (
         sumMetrics._1 / metricPerUser.length,
         sumMetrics._2 / metricPerUser.length,
         sumMetrics._3 / metricPerUser.length
       )
+      println(finalMetrics)
+      finalMetrics
     })
   }
 
