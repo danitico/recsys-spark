@@ -47,7 +47,7 @@ class HybridRecommenderTopK extends Serializable {
     val explicitArray = Vectors.sparse(
       this.numberOfItems,
       test.select("item_id", "rating").collect().map(row => {
-        (row.getInt(0) - 1, row.getInt(1).toDouble)
+        (row.getInt(0) - 1, row.getDouble(1))
       })
     ).toDense.toArray
 
