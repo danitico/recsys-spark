@@ -1,11 +1,11 @@
-package recommender.collaborative.item_based
+package recommender.collaborative.explicit.item_based
 
 import scala.math.abs
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.BaseRecommender
+import recommender.collaborative.explicit.ExplicitBaseRecommender
 
 
-class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isUserBased = false){
+class ItemBasedRatingRecommender(kSimilarItems: Int) extends ExplicitBaseRecommender(isUserBased = false){
   protected var _kSimilarItems: Int = kSimilarItems
 
   def setNumberSimilarItems(k: Int): Unit = {
@@ -13,7 +13,7 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isU
   }
 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Vector)] = {
-    val itemsWithRating = this._matrix.rowIter.filter(_(user) > 0).toList
+    val itemsWithRating = this._matrixRows.filter(_(user) > 0)
 
     if (itemsWithRating.isEmpty) {
       return List()
@@ -40,7 +40,7 @@ class ItemBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender(isU
     numerator/denominator
   }
 
-  def predictionRatingItem(targetItem: Array[Double], user: Int): Double = {
+  override def transform(targetItem: Array[Double], user: Int): Double = {
     val topKItems = this.getKSimilarItems(targetItem, user - 1)
 
     if (topKItems.isEmpty) {

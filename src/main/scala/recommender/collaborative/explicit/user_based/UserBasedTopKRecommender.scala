@@ -1,11 +1,12 @@
-package recommender.collaborative.user_based
+package recommender.collaborative.explicit.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.BaseRecommender
+import recommender.collaborative.explicit.ExplicitBaseRecommender
 
-class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender{
+class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends ExplicitBaseRecommender{
   protected var _kUsers: Int = kUsers
   protected var _kItems: Int = kItems
+  protected var _candidates: List[Array[Double]] = null
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k
@@ -15,21 +16,23 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
     this._kItems = k
   }
 
-  protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector)] = {
-    val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
+  protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Array[Double])] = {
+    val usersWithRating = this._candidates.filter(_(item) > 0)
 
     if (usersWithRating.isEmpty) {
       return List()
     }
 
     val correlations = usersWithRating.map(
-      f => this._similarity.getSimilarity(targetUser, f.toArray)
+      f => this._similarity.getSimilarity(targetUser, f)
     )
 
     correlations.zip(usersWithRating).sortWith(_._1 > _._1).take(this._kUsers)
   }
 
-  def topKItemsForUser(targetUser: Array[Double]): Set[Int] = {
+  override def transform(targetUser: Array[Double]): Seq[(Int, Double)] = {
+    this._candidates = this._matrixRows.map(_.toArray)
+
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
 
     unratedItems.map(item => {
@@ -44,6 +47,6 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends BaseRecommender
 
         (item + 1, score)
       }
-    }).sortWith(_._2 > _._2).take(this._kItems).map(_._1).toSet
+    }).sortWith(_._2 > _._2).take(this._kItems).toSeq
   }
 }

@@ -1,10 +1,10 @@
-package recommender.collaborative.user_based
+package recommender.collaborative.explicit.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.BaseRecommender
+import recommender.collaborative.explicit.ExplicitBaseRecommender
 
 
-class UserBasedRatingRecommender(kUsers: Int) extends BaseRecommender {
+class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
   protected var _kUsers: Int = kUsers
 
   def setKUsers(k: Int): Unit = {
@@ -12,7 +12,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends BaseRecommender {
   }
 
   protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
-    val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
+    val usersWithRating = this._matrixRows.filter(_(item) > 0)
 
     if (usersWithRating.isEmpty) {
       return List()
@@ -43,7 +43,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends BaseRecommender {
     ratingMean + (numerator/denominator)
   }
 
-  def predictionRatingItem(targetUser: Array[Double], item: Int): Double = {
+  override def transform(targetUser: Array[Double], item: Int): Double = {
     val ratedItems = targetUser.filter(_ > 0)
     val ratingMean = ratedItems.sum / ratedItems.length
 
