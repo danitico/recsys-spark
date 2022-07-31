@@ -12,7 +12,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
   }
 
   protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
-    val usersWithRating = this._matrixRows.filter(_(item) > 0)
+    val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
 
     if (usersWithRating.isEmpty) {
       return List()

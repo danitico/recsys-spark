@@ -50,11 +50,11 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
   override def transform(targetUser: Array[Double]): Seq[(Int, Double)] = {
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
 
-    this._ratingsOfItemsRatedByUser = this._matrixRows.zipWithIndex.filter(f => {
+    this._ratingsOfItemsRatedByUser = this._matrix.rowIter.toList.zipWithIndex.filter(f => {
       !unratedItems.contains(f._2)
     }).map(f => (f._1, f._2 + 1))
 
-    val ratingsOfItemsNotRatedByUser = this._matrixRows.zipWithIndex.filter(f => {
+    val ratingsOfItemsNotRatedByUser = this._matrix.rowIter.toList.zipWithIndex.filter(f => {
       unratedItems.contains(f._2)
     }).map(f => (f._1, f._2 + 1))
 

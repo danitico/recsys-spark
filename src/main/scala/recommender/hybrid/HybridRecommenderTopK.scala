@@ -10,8 +10,8 @@ class HybridRecommenderTopK extends Serializable {
   var sequential: SequentialTopKRecommender = null
   var numberOfItems: Int = 0
   var _k: Int = 5
-  var _weightCf: Double = 0.8
-  var _weightSequential: Double = 0.2
+  var _weightCf: Double = 0.6
+  var _weightSequential: Double = 0.4
 
 
   def setNumberOfItems(numberOfItems: Int): this.type = {
@@ -37,7 +37,7 @@ class HybridRecommenderTopK extends Serializable {
     this.sequential.fit(train)
   }
 
-  def transform(test: DataFrame): Seq[(Int, Double)] = {
+  def transform(test: DataFrame): (Seq[(Int, Double)], Seq[(Int, Double)]) = {
     val predictionsSequential = this.sequential.transform(
       test
     ).map(element => {
@@ -53,14 +53,18 @@ class HybridRecommenderTopK extends Serializable {
 
     val predictionsCF = this.collaborativeFiltering.transform(
       explicitArray
-    ).map(element => {
-      (element._1, element._2 * this._weightCf)
+    )
+
+    val maxValueScore = predictionsCF.head._2
+
+    val normalizedPredictionsCF = predictionsCF.map(element => {
+      (element._1, (element._2 / maxValueScore) * this._weightCf)
     })
 
-    val combination = (predictionsSequential ++ predictionsCF).groupBy(_._1).mapValues(
+    val combination = (predictionsSequential ++ normalizedPredictionsCF).groupBy(_._1).mapValues(
       _.map(_._2).sum
     ).toArray
 
-    combination.sortWith(_._2 > _._2).take(this._k)
+    (normalizedPredictionsCF, combination.sortWith(_._2 > _._2).take(this._k).toSeq)
   }
 }

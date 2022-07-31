@@ -31,7 +31,7 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends ExplicitBaseRec
   }
 
   override def transform(targetUser: Array[Double]): Seq[(Int, Double)] = {
-    this._candidates = this._matrixRows.map(_.toArray)
+    this._candidates = this._matrix.rowIter.map(_.toArray).toList
 
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
 

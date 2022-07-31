@@ -72,10 +72,10 @@ object Main {
         val items = row.getList(1).toArray()
         val ratings = row.getList(2).toArray()
 
-        val item = recSysUserBased._matrixRows.slice(userId - 1, userId).head.toArray
+        val targetUser = recSysUserBased._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
         items.zip(ratings).foreach(a => {
           val prediction = recSysUserBased.transform(
-            item, a._1.asInstanceOf[Int]
+            targetUser, a._1.asInstanceOf[Int]
           )
 
           val difference = prediction - a._2.asInstanceOf[Double]
@@ -127,10 +127,10 @@ object Main {
         val users = row.getList(1).toArray()
         val ratings = row.getList(2).toArray()
 
-        val item = recSysItemBased._matrixRows.slice(itemId - 1, itemId).head.toArray
+        val targetItem = recSysItemBased._matrix.rowIter.slice(itemId - 1, itemId).toList.head.toArray
         users.zip(ratings).foreach(a => {
           val prediction = recSysItemBased.transform(
-            item, a._1.asInstanceOf[Int]
+            targetItem, a._1.asInstanceOf[Int]
           )
 
           val difference = prediction - a._2.asInstanceOf[Double]
@@ -186,7 +186,7 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
+        val user = recSys._matrix.rowIter.slice(userId - 1, userId).toList.head.toArray
         val selected = recSys.transform(user)
 
         accumulator.add(
@@ -251,7 +251,7 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
+        val user = recSys._matrix.colIter.slice(userId - 1, userId).toList.head.toArray
         val selected = recSys.transform(user)
 
         accumulator.add(
@@ -332,7 +332,7 @@ object Main {
     })
   }
 
-  def hybridCrossValidation(cf: ExplicitBaseRecommender, sequential: SequentialTopKRecommender, numberOfItems: Int, topK: Int): Seq[(Double, Double, Double)] = {
+  def hybridCrossValidation(cf: ExplicitBaseRecommender, sequential: SequentialTopKRecommender, numberOfItems: Int, topK: Int): Seq[((Double, Double, Double), (Double, Double, Double))] = {
     val spark = SparkSession.getActiveSession.orNull
 
     val hybrid = new HybridRecommenderTopK().setCF(
@@ -343,15 +343,15 @@ object Main {
       numberOfItems
     )
 
-    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
+    val predictions_accumulator1 = new ListBufferAccumulator[List[(Double, Double, Double)]]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
-    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
+    val predictions_accumulator2 = new ListBufferAccumulator[List[(Double, Double, Double)]]
     spark.sparkContext.register(predictions_accumulator2, "predictions2")
-    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
+    val predictions_accumulator3 = new ListBufferAccumulator[List[(Double, Double, Double)]]
     spark.sparkContext.register(predictions_accumulator3, "predictions3")
-    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
+    val predictions_accumulator4 = new ListBufferAccumulator[List[(Double, Double, Double)]]
     spark.sparkContext.register(predictions_accumulator4, "predictions4")
-    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
+    val predictions_accumulator5 = new ListBufferAccumulator[List[(Double, Double, Double)]]
     spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
     Seq(1, 2, 3, 4, 5).map(index => {
@@ -388,21 +388,39 @@ object Main {
         )
 
         accumulator.add(
-          new RankingMetrics(k = topK, selected.map(_._1).toSet, relevant).getRankingMetrics
+          List(
+            new RankingMetrics(k = topK, selected._1.map(_._1).toSet, relevant).getRankingMetrics,
+            new RankingMetrics(k = topK, selected._2.map(_._1).toSet, relevant).getRankingMetrics
+          )
         )
       }: Unit)
 
-      val metricPerUser = accumulator.value
-      val sumMetrics = metricPerUser.reduce((a, b) => {
+      val metricPerUserCF = accumulator.value.head
+      val metricPerUserHybrid = accumulator.value.last
+
+      val sumMetricsCF = metricPerUserCF.reduce((a, b) => {
         (a._1 + b._1, a._2 + b._2, a._3 + b._3)
       })
-      val finalMetrics = (
-        sumMetrics._1 / metricPerUser.length,
-        sumMetrics._2 / metricPerUser.length,
-        sumMetrics._3 / metricPerUser.length
+
+      val sumMetricsHybrid = metricPerUserHybrid.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      val finalMetricsCF = (
+        sumMetricsCF._1 / metricPerUserCF.length,
+        sumMetricsCF._2 / metricPerUserCF.length,
+        sumMetricsCF._3 / metricPerUserCF.length
       )
-      println(finalMetrics)
-      finalMetrics
+
+      val finalMetricsHybrid = (
+        sumMetricsHybrid._1 / metricPerUserHybrid.length,
+        sumMetricsHybrid._2 / metricPerUserHybrid.length,
+        sumMetricsHybrid._3 / metricPerUserHybrid.length
+      )
+
+      println(finalMetricsCF)
+      println(finalMetricsHybrid)
+      (finalMetricsCF, finalMetricsHybrid)
     })
   }
 
