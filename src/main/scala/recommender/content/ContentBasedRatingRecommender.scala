@@ -1,6 +1,5 @@
 package recommender.content
 
-import org.apache.spark.ml.linalg.SparseVector
 import similarity.EuclideanSimilarity
 
 import scala.math.abs
@@ -24,11 +23,11 @@ class ContentBasedRatingRecommender(kSimilarItems: Int) extends ContentBaseRecom
   }
 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Double)] = {
-    val itemsWithRating = this._matrixRows.zipWithIndex.filter(
+    val itemsWithRating = this._matrix.rowIter.zipWithIndex.filter(
       _._1(user) > 0
     ).map(tuple => {
       (tuple._1(user), tuple._2 + 1)
-    })
+    }).toList
 
     if (itemsWithRating.isEmpty) {
       return List()
