@@ -8,7 +8,7 @@ import org.apache.spark.ml.linalg.SparseVector
 import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
-import recommender.content.ContentBasedRatingRecommender
+import recommender.content.{ContentBasedRatingRecommender, ContentBasedTopKRecommender}
 import recommender.sequential.SequentialTopKRecommender
 import recommender.hybrid.HybridRecommenderTopK
 import similarity._
@@ -272,6 +272,75 @@ object Main {
     })
   }
 
+  def contentBasedTopKCrossValidation(spark: SparkSession, similarity: BaseSimilarity, kItems: Int, topK: Int): Seq[(Double, Double, Double)] = {
+    val recSys = new ContentBasedTopKRecommender(kItems, topK)
+    recSys.setSimilarityMeasure(similarity)
+
+    val features = spark.read.options(
+      Map("header" -> "true", "inferSchema" -> "true")
+    ).csv("data/features.csv").cache()
+
+    recSys.setFeatures(features)
+
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      recSys.fit(train, 1682)
+
+      test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
+      ).foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
+
+        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
+        val selected = recSys.transform(user)
+
+        accumulator.add(
+          new RankingMetrics(k = topK, selected.map(_._1).toSet, relevant).getRankingMetrics
+        )
+      }: Unit)
+
+      val metricPerUser = accumulator.value
+      val sumMetrics = metricPerUser.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      (
+        sumMetrics._1 / metricPerUser.length,
+        sumMetrics._2 / metricPerUser.length,
+        sumMetrics._3 / metricPerUser.length
+      )
+    })
+  }
+
   def contentCrossValidation(spark: SparkSession, similarity: BaseSimilarity, k: Int): Seq[Double] = {
     val recSys = new ContentBasedRatingRecommender(k)
     recSys.setSimilarityMeasure(similarity)
@@ -305,7 +374,7 @@ object Main {
         case 5 => predictions_accumulator5
       }
 
-      recSys.readDataframe(spark, train, 1682)
+      recSys.fit(train, 1682)
 
       test.groupBy("item_id").agg(
         collect_list(col("user_id")).as("users"),
@@ -316,11 +385,11 @@ object Main {
         val ratings = row.getList(2).toArray()
 
         val itemFeature = recSys._features.filter(
-          _.getInt(0) == itemId
-        ).head.getAs[SparseVector](1)
+          _._1 == itemId
+        ).head._2
         users.zip(ratings).foreach(a => {
-          val prediction = recSys.predictionRatingItem(
-            itemFeature.toDense.toArray, a._1.asInstanceOf[Int]
+          val prediction = recSys.transform(
+            itemFeature, a._1.asInstanceOf[Int]
           )
 
           val difference = prediction - a._2.asInstanceOf[Double]
@@ -434,21 +503,9 @@ object Main {
     ).appName(
       "TFM"
     ).getOrCreate()
-    //spark.sparkContext.setLogLevel("WARN")
+    spark.sparkContext.setLogLevel("WARN")
 
-    val topK = 5
-    val recSys1 = new ItemBasedTopKRecommender(25, topK)
-    recSys1.setSimilarityMeasure(new EuclideanSimilarity)
-
-    val recSys2 = new SequentialTopKRecommender().setGridSize(
-      3, 3
-    ).setNumberItems(1682).setMinParamsApriori(
-      0.01, 0.95
-    ).setMinParamsSequential(
-      0.01, 0.95
-    ).setPeriods(5).setK(topK)
-
-    val results = hybridCrossValidation(recSys1, recSys2, 1682, topK)
+    val results = contentBasedTopKCrossValidation(spark, new EuclideanSimilarity, 25, 5)
     println(results)
 
     spark.stop()
