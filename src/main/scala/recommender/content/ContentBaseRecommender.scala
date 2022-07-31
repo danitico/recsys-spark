@@ -2,7 +2,7 @@ package recommender.content
 
 import scala.collection.mutable.ListBuffer
 import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.linalg.{SparseMatrix, SparseVector, Vector}
+import org.apache.spark.ml.linalg.{SparseMatrix, SparseVector, DenseMatrix}
 import org.apache.spark.sql.functions.{col, collect_list}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import accumulator.ListBufferAccumulator
@@ -11,7 +11,7 @@ import similarity.BaseSimilarity
 
 class ContentBaseRecommender extends Serializable {
   var _features: List[(Int, Array[Double])] = null
-  var _matrixRows: List[Vector] = null
+  var _matrix: DenseMatrix = null
   var _similarity: BaseSimilarity = null
 
   def setSimilarityMeasure(similarityMeasure: BaseSimilarity): Unit = {
@@ -24,7 +24,7 @@ class ContentBaseRecommender extends Serializable {
 
   def fit(dataframe: DataFrame, numberOfItems: Long): Unit = {
     val numberOfUsers = this.getNumberOfUsers(dataframe)
-    this._matrixRows = this.calculateDenseMatrix(dataframe, numberOfUsers, numberOfItems)
+    this._matrix = this.calculateDenseMatrix(dataframe, numberOfUsers, numberOfItems)
   }
 
   def transform(target: Array[Double], index: Int): Double = {
@@ -81,7 +81,7 @@ class ContentBaseRecommender extends Serializable {
     (rowIndices, colSeparators, values)
   }
 
-  protected def calculateDenseMatrix(dataframe: DataFrame, rows: Long, cols: Long): List[Vector] = {
+  protected def calculateDenseMatrix(dataframe: DataFrame, rows: Long, cols: Long): DenseMatrix = {
     val groupedDf = dataframe.groupBy(
       "item_id"
     ).agg(
@@ -121,6 +121,6 @@ class ContentBaseRecommender extends Serializable {
       values = values.value.toArray
     )
 
-    sparse.transpose.toDense.rowIter.toList
+    sparse.transpose.toDense
   }
 }
