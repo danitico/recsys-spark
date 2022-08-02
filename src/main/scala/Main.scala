@@ -343,21 +343,21 @@ object Main {
       numberOfItems
     )
 
-    val predictions_accumulator1 = new ListBufferAccumulator[List[(Double, Double, Double)]]
+    val predictions_accumulator1 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
     spark.sparkContext.register(predictions_accumulator1, "predictions1")
-    val predictions_accumulator2 = new ListBufferAccumulator[List[(Double, Double, Double)]]
+    val predictions_accumulator2 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
     spark.sparkContext.register(predictions_accumulator2, "predictions2")
-    val predictions_accumulator3 = new ListBufferAccumulator[List[(Double, Double, Double)]]
+    val predictions_accumulator3 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
     spark.sparkContext.register(predictions_accumulator3, "predictions3")
-    val predictions_accumulator4 = new ListBufferAccumulator[List[(Double, Double, Double)]]
+    val predictions_accumulator4 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
     spark.sparkContext.register(predictions_accumulator4, "predictions4")
-    val predictions_accumulator5 = new ListBufferAccumulator[List[(Double, Double, Double)]]
+    val predictions_accumulator5 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
     spark.sparkContext.register(predictions_accumulator5, "predictions5")
 
     Seq(1, 2, 3, 4, 5).map(index => {
       println("Fold " + index)
-      val train = dataset("data/train-fold" + index + ".csv")
-      val test = dataset("data/test-fold" + index + ".csv")
+      val train = dataset("dbfs:/tfm/data/train-fold" + index + ".csv")
+      val test = dataset("dbfs:/tfm/data/test-fold" + index + ".csv")
 
       val accumulator = index match {
         case 1 => predictions_accumulator1
@@ -388,15 +388,15 @@ object Main {
         )
 
         accumulator.add(
-          List(
+          (
             new RankingMetrics(k = topK, selected._1.map(_._1).toSet, relevant).getRankingMetrics,
             new RankingMetrics(k = topK, selected._2.map(_._1).toSet, relevant).getRankingMetrics
           )
         )
       }: Unit)
 
-      val metricPerUserCF = accumulator.value.head
-      val metricPerUserHybrid = accumulator.value.last
+      val metricPerUserCF = accumulator.value.map(_._1)
+      val metricPerUserHybrid = accumulator.value.map(_._2)
 
       val sumMetricsCF = metricPerUserCF.reduce((a, b) => {
         (a._1 + b._1, a._2 + b._2, a._3 + b._3)
