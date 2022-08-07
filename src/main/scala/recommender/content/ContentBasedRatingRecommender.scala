@@ -1,12 +1,11 @@
 package recommender.content
 
-import org.apache.spark.ml.linalg.SparseVector
 import similarity.EuclideanSimilarity
 
 import scala.math.abs
 
 
-class ContentBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender {
+class ContentBasedRatingRecommender(kSimilarItems: Int) extends ContentBaseRecommender {
   protected var _kSimilarItems: Int = kSimilarItems
 
   def setNumberSimilarItems(k: Int): Unit = {
@@ -26,15 +25,17 @@ class ContentBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender 
   protected def getKSimilarItems(targetItem: Array[Double], user: Int): List[(Double, Double)] = {
     val itemsWithRating = this._matrix.rowIter.zipWithIndex.filter(
       _._1(user) > 0
-    ).map(tuple => (tuple._1(user), tuple._2 + 1)).toList
+    ).map(tuple => {
+      (tuple._1(user), tuple._2 + 1)
+    }).toList
 
     if (itemsWithRating.isEmpty) {
       return List()
     }
 
     val correlations = itemsWithRating.map(tuple => {
-      val itemFeature = this._features.filter(_.getInt(0) == tuple._2).head.getAs[SparseVector](1)
-      this.solveSimilarity(targetItem, itemFeature.toDense.toArray)
+      val itemFeature = this._features.filter(_._1 == tuple._2).head._2
+      this.solveSimilarity(targetItem, itemFeature)
     })
 
     if (correlations.forall(_.isNaN)) {
@@ -56,7 +57,7 @@ class ContentBasedRatingRecommender(kSimilarItems: Int) extends BaseRecommender 
     numerator/denominator
   }
 
-  def predictionRatingItem(targetItem: Array[Double], user: Int): Double = {
+  override def transform(targetItem: Array[Double], user: Int): Double = {
     val topKItems = this.getKSimilarItems(targetItem, user - 1)
 
     if (topKItems.isEmpty) {
