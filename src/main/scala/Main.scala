@@ -8,9 +8,9 @@ import org.apache.spark.ml.linalg.SparseVector
 import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
-import recommender.content.{ContentBasedRatingRecommender, ContentBasedTopKRecommender}
+import recommender.content.{ContentBaseRecommender, ContentBasedRatingRecommender, ContentBasedTopKRecommender}
 import recommender.sequential.SequentialTopKRecommender
-import recommender.hybrid.HybridRecommenderTopK
+import recommender.hybrid.{HybridContentRecommenderTopK, HybridRecommenderTopK}
 import similarity._
 
 object Main {
@@ -493,6 +493,98 @@ object Main {
     })
   }
 
+  def hybridContentCrossValidation(contentRecsys: ContentBasedTopKRecommender, sequential: SequentialTopKRecommender, numberOfItems: Int, topK: Int): Seq[((Double, Double, Double), (Double, Double, Double))] = {
+    val spark = SparkSession.getActiveSession.orNull
+
+    val hybrid = new HybridContentRecommenderTopK().setCF(
+      contentRecsys
+    ).setSequential(
+      sequential
+    ).setNumberOfItems(
+      numberOfItems
+    )
+
+    val predictions_accumulator1 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[((Double, Double, Double), (Double, Double, Double))]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("dbfs:/FileStore/shared_uploads/tfm/data/train_fold" + index + ".csv")
+      val test = dataset("dbfs:/FileStore/shared_uploads/tfm/data/test_fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      hybrid.fit(train)
+
+      val testData = test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
+      ).collect()
+
+      testData.foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
+
+        val selected = hybrid.transform(
+          train.filter(col("user_id") === userId)
+        )
+
+        accumulator.add(
+          (
+            new RankingMetrics(k = topK, selected._1.map(_._1).toSet, relevant).getRankingMetrics,
+            new RankingMetrics(k = topK, selected._2.map(_._1).toSet, relevant).getRankingMetrics
+          )
+        )
+      }: Unit)
+
+      val metricPerUserContent = accumulator.value.map(_._1)
+      val metricPerUserHybrid = accumulator.value.map(_._2)
+
+      val sumMetricsContent = metricPerUserContent.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      val sumMetricsHybrid = metricPerUserHybrid.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      val finalMetricsContent = (
+        sumMetricsContent._1 / metricPerUserContent.length,
+        sumMetricsContent._2 / metricPerUserContent.length,
+        sumMetricsContent._3 / metricPerUserContent.length
+      )
+
+      val finalMetricsHybrid = (
+        sumMetricsHybrid._1 / metricPerUserHybrid.length,
+        sumMetricsHybrid._2 / metricPerUserHybrid.length,
+        sumMetricsHybrid._3 / metricPerUserHybrid.length
+      )
+
+      println(finalMetricsContent)
+      println(finalMetricsHybrid)
+      (finalMetricsContent, finalMetricsHybrid)
+    })
+  }
+
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master(
       "local[*]"
@@ -504,6 +596,15 @@ object Main {
       "TFM"
     ).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+
+    val recSys = new ContentBasedTopKRecommender(25, 5)
+    recSys.setSimilarityMeasure(new EuclideanSimilarity)
+
+    val features = spark.read.options(
+      Map("header" -> "true", "inferSchema" -> "true")
+    ).csv("dbfs:/FileStore/shared_uploads/tfm/data/features.csv")
+
+    recSys.setFeatures(features)
 
     val results = contentBasedTopKCrossValidation(spark, new EuclideanSimilarity, 25, 5)
     println(results)
