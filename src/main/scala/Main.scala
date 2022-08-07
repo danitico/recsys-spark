@@ -4,11 +4,10 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
-import org.apache.spark.ml.linalg.SparseVector
 import recommender.collaborative.explicit.ExplicitBaseRecommender
 import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
 import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
-import recommender.content.{ContentBaseRecommender, ContentBasedRatingRecommender, ContentBasedTopKRecommender}
+import recommender.content.{ContentBasedRatingRecommender, ContentBasedTopKRecommender}
 import recommender.sequential.SequentialTopKRecommender
 import recommender.hybrid.{HybridContentRecommenderTopK, HybridRecommenderTopK}
 import similarity._
@@ -320,7 +319,7 @@ object Main {
           _._2.asInstanceOf[Double] >= 4.0
         ).map(_._1.asInstanceOf[Int]).toSet
 
-        val user = recSys._matrixRows.slice(userId - 1, userId).head.toArray
+        val user = recSys._matrix.colIter.slice(userId - 1, userId).toList.head.toArray
         val selected = recSys.transform(user)
 
         accumulator.add(
