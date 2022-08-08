@@ -6,13 +6,15 @@ import recommender.BaseRecommender
 
 
 class UserBasedRatingRecommender(kUsers: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = true) {
-  protected var _kUsers: Int = kUsers
+  private var _kUsers: Int = kUsers
+
+  def getKUsers: Int = this._kUsers
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k
   }
 
-  protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
+  private def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
     val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
 
     if (usersWithRating.isEmpty) {

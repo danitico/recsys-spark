@@ -8,13 +8,34 @@ import recommender.sequential.SequentialTopKRecommender
 
 
 class HybridRecommenderTopK(kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems) {
-  var _k: Int = kRecommendedItems
-  var _firstRecommender: BaseRecommender = null
-  var _isFirstRecommenderSequential = false
-  var _secondRecommender: BaseRecommender = null
-  var _isSecondRecommenderSequential = false
-  var _weightFirstRecommender: Double = 0.6
-  var _weightSecondRecommender: Double = 0.4
+  private var _k: Int = kRecommendedItems
+  private var _firstRecommender: BaseRecommender = null
+  private var _isFirstRecommenderSequential = false
+  private var _secondRecommender: BaseRecommender = null
+  private var _isSecondRecommenderSequential = false
+  private var _weightFirstRecommender: Double = 0.6
+  private var _weightSecondRecommender: Double = 0.4
+
+  def getKRecommendedItems: Int = this._k
+
+  def setKRecommendedItems(kRecommendedItems: Int): this.type = {
+    this._k = kRecommendedItems
+    this
+  }
+
+  def getWeightFirstRecommender: Double = this._weightFirstRecommender
+
+  def setWeightFirstRecommender(weight: Double): this.type = {
+    this._weightFirstRecommender = weight
+    this
+  }
+
+  def getWeightSecondRecommender: Double = this._weightSecondRecommender
+
+  def setWeightSecondRecommender(weight: Double): this.type = {
+    this._weightSecondRecommender = weight
+    this
+  }
 
   def setFirstRecommender(recSys: BaseRecommender): this.type = {
     this._firstRecommender = recSys

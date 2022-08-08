@@ -2,6 +2,7 @@ package similarity
 
 import scala.math.{pow, sqrt}
 
+
 class PearsonSimilarity extends BaseSimilarity {
   def getSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
     val mean1 = firstArray.sum / firstArray.length

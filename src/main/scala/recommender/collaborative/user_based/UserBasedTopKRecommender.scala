@@ -4,19 +4,23 @@ import recommender.BaseRecommender
 
 
 class UserBasedTopKRecommender(kUsers: Int, kItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = true) {
-  protected var _kUsers: Int = kUsers
-  protected var _kItems: Int = kItems
-  protected var _candidates: List[Array[Double]] = null
+  private var _kUsers: Int = kUsers
+  private var _kItems: Int = kItems
+  private var _candidates: List[Array[Double]] = null
+
+  def getKUsers: Int = this._kUsers
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k
   }
 
+  def getKItems: Int = this._kItems
+
   def setKItems(k: Int): Unit = {
     this._kItems = k
   }
 
-  protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Array[Double])] = {
+  private def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Array[Double])] = {
     val usersWithRating = this._candidates.filter(_(item) > 0)
 
     if (usersWithRating.isEmpty) {

@@ -2,6 +2,7 @@ package similarity
 
 import scala.math.{pow, sqrt}
 
+
 class CosineSimilarity extends BaseSimilarity {
   def getSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
     val numerator = firstArray.zip(secondArray).map {case (a, b) => a*b}.sum

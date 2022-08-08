@@ -8,7 +8,7 @@ import recommender.BaseRecommender
 
 
 class ContentRecommender(numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = false) {
-  var _features: List[(Int, Array[Double])] = null
+  protected var _features: List[(Int, Array[Double])] = null
 
   def getFeatures: List[(Int, Array[Double])] = this._features
 
@@ -16,7 +16,7 @@ class ContentRecommender(numberOfItems: Long) extends BaseRecommender(numberOfIt
     this._features = this.transformFeatures(features)
   }
 
-  protected def transformFeatures(features: DataFrame): List[(Int, Array[Double])] = {
+  private def transformFeatures(features: DataFrame): List[(Int, Array[Double])] = {
     val assembler = new VectorAssembler()
     val columnsToTransform = features.columns.drop(1)
 
