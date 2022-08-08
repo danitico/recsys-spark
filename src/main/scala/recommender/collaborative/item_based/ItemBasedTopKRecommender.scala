@@ -38,7 +38,7 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, numbe
     }.sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
+  private def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
       a._1 * targetUser(a._2)
     }).sum

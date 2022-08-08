@@ -1,6 +1,7 @@
 package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
+
 import recommender.BaseRecommender
 
 
@@ -33,7 +34,7 @@ class UserBasedRatingRecommender(kUsers: Int, numberOfItems: Long) extends BaseR
     }.sortWith(_._1 > _._1).take(this._kUsers)
   }
 
-  protected def ratingCalculation(topKUsers: List[(Double, Vector, Double)], ratingMean: Double, item: Int): Double = {
+  private def ratingCalculation(topKUsers: List[(Double, Vector, Double)], ratingMean: Double, item: Int): Double = {
     val numerator = topKUsers.map(a => {
       a._1 * (a._2(item) - a._3)
     }).sum

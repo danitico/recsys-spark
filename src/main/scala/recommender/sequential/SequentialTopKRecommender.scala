@@ -1,16 +1,18 @@
 package recommender.sequential
 
 import org.apache.spark.ml.fpm.FPGrowth
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.ml.linalg.Vectors
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.sql.DataFrame
+
 import som.{SOM, SOMModel}
 import com.github.nscala_time.time.Imports._
 
+import recommender.BaseRecommender
 
-class SequentialTopKRecommender extends Serializable {
-  private var _k: Int = 5
-  private var _numberItems: Long = -1
+
+class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems) {
+  private var _k: Int = kRecommendedItems
   private var _transactionDf: DataFrame = null
   private var _transactionModel: SOMModel = null
   private var _periodRanges: Seq[(Long, String, String)] = null
@@ -26,13 +28,8 @@ class SequentialTopKRecommender extends Serializable {
   private var _minSupportSequential: Double = 0.0
   private var _minConfidenceSequential: Double = 0.0
 
-  def setK(kItems: Int): this.type = {
-    this._k = kItems
-    this
-  }
-
-  def setNumberItems(numberItems: Int): this.type = {
-    this._numberItems = numberItems
+  def setKRecommendedItems(kRecommendedItems: Int): this.type = {
+    this._k = kRecommendedItems
     this
   }
 
@@ -69,7 +66,7 @@ class SequentialTopKRecommender extends Serializable {
     this
   }
 
-  def fit(train: DataFrame): Unit = {
+  override def fit(train: DataFrame): Unit = {
     // Get transactions per user and timestamp. Coding bought products as a binary vector
     this._transactionDf = this.getTransactionDf(train)
 
@@ -83,7 +80,7 @@ class SequentialTopKRecommender extends Serializable {
     this.obtainRules()
   }
 
-  def transform(transactionsUser: DataFrame): Array[(Int, Double)] = {
+  override def transform(transactionsUser: DataFrame): Seq[(Int, Double)] = {
     val transactionDf = this.getTransactionDf(transactionsUser)
     val transactionDfWithPeriods = this.transformPeriods(transactionDf)
     val transactionsWithClusters = this._transactionModel.transform(
@@ -91,10 +88,10 @@ class SequentialTopKRecommender extends Serializable {
     )
 
     val items = this.obtainItemsForTargetUser(transactionsWithClusters)
-    val desiredConsequent = this.getMostAppropiateConsequent(items)
+    val desiredConsequent = this.getMostAppropriateConsequent(items)
 
     if (desiredConsequent == -1) {
-      Array()
+      Seq()
     } else {
       val binaryToInt = udf((row: List[Double]) => {
         row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
@@ -108,7 +105,7 @@ class SequentialTopKRecommender extends Serializable {
 
 
       if (transactionsAtT.rdd.isEmpty()) {
-        Array()
+        Seq()
       } else {
         val previouslyItems = transactionsUser.select(
           "item_id"
@@ -132,11 +129,7 @@ class SequentialTopKRecommender extends Serializable {
           _._2 > _._2
         )
 
-        val maxFrequency = selectedCandidates.head._2
-
-        selectedCandidates.map(candidate => {
-          (candidate._1, candidate._2 / maxFrequency)
-        })
+        selectedCandidates
       }
     }
   }
@@ -206,7 +199,7 @@ class SequentialTopKRecommender extends Serializable {
     ).select("items").first().getList(0).toArray.map(_.asInstanceOf[String]).toList
   }
 
-  private def getMostAppropiateConsequent(items: List[String]): Int = {
+  private def getMostAppropriateConsequent(items: List[String]): Int = {
     val getScore = udf((antecedent: List[String], support: Double, confidence: Double) => {
       val similarity = antecedent.map(element => {
         if (items.contains(element)) 1 else 0
@@ -240,7 +233,7 @@ class SequentialTopKRecommender extends Serializable {
     // Creating udf to convert list of integers into a binary array
     val arrayToBinary = udf((row: Array[Int]) => {
       Vectors.sparse(
-        this._numberItems.toInt,
+        this._numberOfItems.toInt,
         row.map((element: Int) => {
           (element - 1, 1.0)
         })
@@ -269,7 +262,7 @@ class SequentialTopKRecommender extends Serializable {
   }
 
   private def buildPeriodsFromProvidedRanges(): Unit = {
-    // udf to parse each timestampo to a given period depending on the datetime ranges
+    // udf to parse each timestamp to a given period depending on the datetime ranges
     val timestampToPeriod = udf((timestamp: String) => {
       val formatInDataframe = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss")
       val formatInPeriods = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.S")

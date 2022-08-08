@@ -1,7 +1,9 @@
 package recommender.collaborative.item_based
 
 import scala.math.abs
+
 import org.apache.spark.ml.linalg.Vector
+
 import recommender.BaseRecommender
 
 
@@ -30,7 +32,7 @@ class ItemBasedRatingRecommender(kSimilarItems: Int, numberOfItems: Long) extend
     correlations.zip(itemsWithRating).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Vector)], user: Int): Double = {
+  private def ratingCalculation(topKItems: List[(Double, Vector)], user: Int): Double = {
     val numerator = topKItems.map(a => {
       a._1 * a._2(user)
     }).sum

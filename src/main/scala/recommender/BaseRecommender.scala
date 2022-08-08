@@ -1,12 +1,14 @@
 package recommender
 
-import accumulator.ListBufferAccumulator
+import scala.collection.mutable.ListBuffer
+
 import org.apache.spark.ml.linalg.{DenseMatrix, SparseMatrix}
-import org.apache.spark.sql.functions.{col, collect_list}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.functions.{col, collect_list}
+
+import accumulator.ListBufferAccumulator
 import similarity.BaseSimilarity
 
-import scala.collection.mutable.ListBuffer
 
 class BaseRecommender(numberOfItems: Long, isUserBased: Boolean = true) extends RecommenderInterface(numberOfItems, isUserBased) {
   def getSimilarity: BaseSimilarity = this._similarity
@@ -35,6 +37,8 @@ class BaseRecommender(numberOfItems: Long, isUserBased: Boolean = true) extends 
   def transform(target: Array[Double], index: Int): Double = -1.0
 
   def transform(target: Array[Double]): Seq[(Int, Double)] = Seq()
+
+  def transform(target: DataFrame): Seq[(Int, Double)] = Seq()
 
   protected def getNumberOfUsers(dataframe: DataFrame): Long = {
     dataframe.select("user_id").distinct().count()

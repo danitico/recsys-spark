@@ -2,69 +2,79 @@ package recommender.hybrid
 
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.DataFrame
-import recommender.collaborative.explicit.ExplicitBaseRecommender
+
+import recommender.BaseRecommender
 import recommender.sequential.SequentialTopKRecommender
 
-class HybridRecommenderTopK extends Serializable {
-  var collaborativeFiltering: ExplicitBaseRecommender = null
-  var sequential: SequentialTopKRecommender = null
-  var numberOfItems: Int = 0
-  var _k: Int = 5
-  var _weightCf: Double = 0.6
-  var _weightSequential: Double = 0.4
 
+class HybridRecommenderTopK(kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems) {
+  var _k: Int = kRecommendedItems
+  var _firstRecommender: BaseRecommender = null
+  var _isFirstRecommenderSequential = false
+  var _secondRecommender: BaseRecommender = null
+  var _isSecondRecommenderSequential = false
+  var _weightFirstRecommender: Double = 0.6
+  var _weightSecondRecommender: Double = 0.4
 
-  def setNumberOfItems(numberOfItems: Int): this.type = {
-    this.numberOfItems = numberOfItems
+  def setFirstRecommender(recSys: BaseRecommender): this.type = {
+    this._firstRecommender = recSys
+    this._isFirstRecommenderSequential = recSys.isInstanceOf[SequentialTopKRecommender]
     this
   }
 
-  def setCF(recSys: ExplicitBaseRecommender): this.type = {
-    this.collaborativeFiltering = recSys
+  def setSecondRecommender(recSys: BaseRecommender): this.type = {
+    this._secondRecommender = recSys
+    this._isSecondRecommenderSequential = recSys.isInstanceOf[SequentialTopKRecommender]
     this
   }
 
-  def setSequential(recSys: SequentialTopKRecommender): this.type = {
-    this.sequential = recSys
-    this
-  }
+  private def normalizeRanking(ranking: Seq[(Int, Double)], weight: Double): Seq[(Int, Double)] = {
+    val maxValue = ranking.head._2
 
-  def fit(train: DataFrame): Unit = {
-    this.collaborativeFiltering.fit(
-      train, this.numberOfItems
-    )
-
-    this.sequential.fit(train)
-  }
-
-  def transform(test: DataFrame): (Seq[(Int, Double)], Seq[(Int, Double)]) = {
-    val predictionsSequential = this.sequential.transform(
-      test
-    ).map(element => {
-      (element._1, element._2 * this._weightSequential)
+    ranking.map(element => {
+      (element._1, (element._2 / maxValue) * weight)
     })
+  }
+
+  override def fit(train: DataFrame): Unit = {
+    this._firstRecommender.fit(train)
+    this._secondRecommender.fit(train)
+  }
+
+  override def transform(test: DataFrame): Seq[(Int, Double)] = {
+    var predictionsFirstRecommender: Seq[(Int, Double)] = Seq()
+    var predictionsSecondRecommender: Seq[(Int, Double)] = Seq()
 
     val explicitArray = Vectors.sparse(
-      this.numberOfItems,
+      this._numberOfItems.toInt,
       test.select("item_id", "rating").collect().map(row => {
         (row.getInt(0) - 1, row.getDouble(1))
       })
     ).toDense.toArray
 
-    val predictionsCF = this.collaborativeFiltering.transform(
-      explicitArray
+    if (this._isFirstRecommenderSequential) {
+      predictionsFirstRecommender = this._firstRecommender.transform(test)
+    } else {
+      predictionsFirstRecommender = this._firstRecommender.transform(explicitArray)
+    }
+
+    if (this._isFirstRecommenderSequential) {
+      predictionsSecondRecommender = this._secondRecommender.transform(test)
+    } else {
+      predictionsSecondRecommender = this._secondRecommender.transform(explicitArray)
+    }
+
+    val normalizedPredictionsFirstRecommender = this.normalizeRanking(
+      predictionsFirstRecommender, this._weightFirstRecommender
+    )
+    val normalizedPredictionsSecondRecommender = this.normalizeRanking(
+      predictionsSecondRecommender, this._weightSecondRecommender
     )
 
-    val maxValueScore = predictionsCF.head._2
-
-    val normalizedPredictionsCF = predictionsCF.map(element => {
-      (element._1, (element._2 / maxValueScore) * this._weightCf)
-    })
-
-    val combination = (predictionsSequential ++ normalizedPredictionsCF).groupBy(_._1).mapValues(
+    val combination = (normalizedPredictionsFirstRecommender ++ normalizedPredictionsSecondRecommender).groupBy(_._1).mapValues(
       _.map(_._2).sum
     ).toArray
 
-    (normalizedPredictionsCF, combination.sortWith(_._2 > _._2).take(this._k).toSeq)
+    combination.sortWith(_._2 > _._2).take(this._k).toSeq
   }
 }

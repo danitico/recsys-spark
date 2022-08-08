@@ -2,6 +2,7 @@ package metrics
 
 import scala.math.{sqrt, pow, abs}
 
+
 class PredictionMetrics extends Serializable {
   private var _errors: Array[Double] = Array()
 

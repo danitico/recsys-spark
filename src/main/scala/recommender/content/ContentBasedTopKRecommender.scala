@@ -1,15 +1,16 @@
 package recommender.content
 
-import similarity.EuclideanSimilarity
-
 import scala.math.abs
 
-class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends ContentBaseRecommender {
+import similarity.EuclideanSimilarity
+
+
+class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, numberOfItems: Long) extends ContentRecommender(numberOfItems) {
   protected var _kSimilarItems: Int = kSimilarItems
   protected var _kRecommendedItems: Int = kRecommendedItems
   protected var _itemsRatedByUser: List[Int] = null
 
-  def setNumberSimilarItems(k: Int): Unit = {
+  def setKSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k
   }
 
@@ -17,7 +18,7 @@ class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) ex
     this._kRecommendedItems = k
   }
 
-  def solveSimilarity(targetItem: Array[Double], otherItem: Array[Double]): Double = {
+  protected def solveSimilarity(targetItem: Array[Double], otherItem: Array[Double]): Double = {
     val similarity = this._similarity.getSimilarity(targetItem, otherItem)
 
     if (similarity == 0.0) {
@@ -46,7 +47,7 @@ class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) ex
     correlations.zip(this._itemsRatedByUser).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
+  private def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
       a._1 * targetUser(a._2)
     }).sum
