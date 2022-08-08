@@ -50,11 +50,15 @@ class HybridRecommenderTopK(kRecommendedItems: Int, numberOfItems: Long) extends
   }
 
   private def normalizeRanking(ranking: Seq[(Int, Double)], weight: Double): Seq[(Int, Double)] = {
-    val maxValue = ranking.head._2
+    if (ranking.isEmpty) {
+      Seq()
+    } else {
+      val maxValue = ranking.head._2
 
-    ranking.map(element => {
-      (element._1, (element._2 / maxValue) * weight)
-    })
+      ranking.map(element => {
+        (element._1, (element._2 / maxValue) * weight)
+      })
+    }
   }
 
   override def fit(train: DataFrame): Unit = {
