@@ -1,12 +1,13 @@
-package recommender.collaborative.explicit.item_based
-
-import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.explicit.ExplicitBaseRecommender
+package recommender.collaborative.item_based
 
 import scala.math.abs
 
+import org.apache.spark.ml.linalg.Vector
 
-class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends ExplicitBaseRecommender(isUserBased = false){
+import recommender.BaseRecommender
+
+
+class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems, isUserBased = false){
   protected var _kSimilarItems: Int = kSimilarItems
   protected var _kRecommendedItems: Int = kRecommendedItems
   protected var _ratingsOfItemsRatedByUser: List[(Vector, Int)] = null

@@ -1,10 +1,10 @@
-package recommender.collaborative.explicit.user_based
+package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.explicit.ExplicitBaseRecommender
+import recommender.BaseRecommender
 
 
-class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
+class UserBasedRatingRecommender(kUsers: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = true) {
   protected var _kUsers: Int = kUsers
 
   def setKUsers(k: Int): Unit = {

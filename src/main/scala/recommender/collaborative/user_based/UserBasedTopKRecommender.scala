@@ -1,9 +1,11 @@
-package recommender.collaborative.explicit.user_based
+package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.explicit.ExplicitBaseRecommender
 
-class UserBasedTopKRecommender(kUsers: Int, kItems: Int) extends ExplicitBaseRecommender{
+import recommender.BaseRecommender
+
+
+class UserBasedTopKRecommender(kUsers: Int, kItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = true) {
   protected var _kUsers: Int = kUsers
   protected var _kItems: Int = kItems
   protected var _candidates: List[Array[Double]] = null

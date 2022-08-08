@@ -5,9 +5,9 @@ import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
 import accumulator.ListBufferAccumulator
 import metrics.{PredictionMetrics, RankingMetrics}
 import recommender.collaborative.explicit.ExplicitBaseRecommender
-import recommender.collaborative.explicit.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
-import recommender.collaborative.explicit.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
-import recommender.content.{ContentBasedRatingRecommender, ContentBasedTopKRecommender}
+import recommender.collaborative.item_based.{ItemBasedRatingRecommender, ItemBasedTopKRecommender}
+import recommender.collaborative.user_based.{UserBasedRatingRecommender, UserBasedTopKRecommender}
+import recommender.content.ContentBasedRatingRecommender
 import recommender.sequential.SequentialTopKRecommender
 import recommender.hybrid.{HybridContentRecommenderTopK, HybridRecommenderTopK}
 import similarity._
