@@ -20,21 +20,42 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int, numberOfItems: Long) ex
     this._kItems = k
   }
 
-  private def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Array[Double])] = {
+  private def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Array[Double], Double)] = {
     val usersWithRating = this._candidates.filter(_(item) > 0)
 
     if (usersWithRating.isEmpty) {
       return List()
     }
 
+    val meanRatingUsers = usersWithRating.map(f => {
+      val ratedItems = f.filter(_ > 0)
+
+      ratedItems.sum / ratedItems.length
+    })
+
     val correlations = usersWithRating.map(
       f => this._similarity.getSimilarity(targetUser, f)
     )
 
-    correlations.zip(usersWithRating).sortWith(_._1 > _._1).take(this._kUsers)
+    correlations.zip(usersWithRating).zip(meanRatingUsers).map {
+      case ((a, b), c) => (a, b, c)
+    }.sortWith(_._1 > _._1).take(this._kUsers)
+  }
+
+  private def ratingCalculation(topKUsers: List[(Double, Array[Double], Double)], ratingMean: Double, item: Int): Double = {
+    val numerator = topKUsers.map(a => {
+      a._1 * (a._2(item) - a._3)
+    }).sum
+
+    val denominator = topKUsers.map(_._1).sum
+
+    ratingMean + (numerator/denominator)
   }
 
   override def transform(targetUser: Array[Double]): Seq[(Int, Double)] = {
+    val ratedItems = targetUser.filter(_ > 0)
+    val ratingMean = ratedItems.sum / ratedItems.length
+
     this._candidates = this._matrix.rowIter.map(_.toArray).toList
 
     val unratedItems = targetUser.zipWithIndex.filter(_._1 == 0).map(_._2)
@@ -45,11 +66,9 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int, numberOfItems: Long) ex
       if (similarUsers.isEmpty) {
         (item + 1, 0.0)
       } else {
-        val score = similarUsers.map(a => {
-          a._1 * a._2(item)
-        }).sum
+        val rating = this.ratingCalculation(similarUsers, ratingMean, item)
 
-        (item + 1, score)
+        (item + 1, rating)
       }
     }).sortWith(_._2 > _._2).take(this._kItems).toSeq
   }
