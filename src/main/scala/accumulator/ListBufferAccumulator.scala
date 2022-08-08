@@ -1,8 +1,9 @@
 package accumulator
 
+import scala.collection.mutable.ListBuffer
+
 import org.apache.spark.util.AccumulatorV2
 
-import scala.collection.mutable.ListBuffer
 
 class ListBufferAccumulator[A] extends AccumulatorV2[A, ListBuffer[A]] {
   private val accumulator = ListBuffer[A]()

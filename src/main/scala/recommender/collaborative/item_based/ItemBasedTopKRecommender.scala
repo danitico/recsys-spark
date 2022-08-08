@@ -1,25 +1,30 @@
-package recommender.collaborative.explicit.item_based
-
-import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.explicit.ExplicitBaseRecommender
+package recommender.collaborative.item_based
 
 import scala.math.abs
 
+import org.apache.spark.ml.linalg.Vector
 
-class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends ExplicitBaseRecommender(isUserBased = false){
-  protected var _kSimilarItems: Int = kSimilarItems
-  protected var _kRecommendedItems: Int = kRecommendedItems
-  protected var _ratingsOfItemsRatedByUser: List[(Vector, Int)] = null
+import recommender.BaseRecommender
+
+
+class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems, isUserBased = false){
+  private var _kSimilarItems: Int = kSimilarItems
+  private var _kRecommendedItems: Int = kRecommendedItems
+  private var _ratingsOfItemsRatedByUser: List[(Vector, Int)] = null
+
+  def getNumberSimilarItems: Int = this._kSimilarItems
 
   def setNumberSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k
   }
 
+  def getKRecommendedItems: Int = this._kRecommendedItems
+
   def setKRecommendedItems(k: Int): Unit = {
     this._kRecommendedItems = k
   }
 
-  protected def getKSimilarItems(targetItem: Array[Double]): List[(Double, Int)] = {
+  private def getKSimilarItems(targetItem: Array[Double]): List[(Double, Int)] = {
     if (this._ratingsOfItemsRatedByUser.isEmpty) {
       return List()
     }
@@ -37,7 +42,7 @@ class ItemBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) exten
     }.sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
+  private def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
       a._1 * targetUser(a._2)
     }).sum

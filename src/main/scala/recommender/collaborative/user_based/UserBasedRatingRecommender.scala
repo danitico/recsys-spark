@@ -1,17 +1,20 @@
-package recommender.collaborative.explicit.user_based
+package recommender.collaborative.user_based
 
 import org.apache.spark.ml.linalg.Vector
-import recommender.collaborative.explicit.ExplicitBaseRecommender
+
+import recommender.BaseRecommender
 
 
-class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
-  protected var _kUsers: Int = kUsers
+class UserBasedRatingRecommender(kUsers: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems, isUserBased = true) {
+  private var _kUsers: Int = kUsers
+
+  def getKUsers: Int = this._kUsers
 
   def setKUsers(k: Int): Unit = {
     this._kUsers = k
   }
 
-  protected def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
+  private def getKSimilarUsers(targetUser: Array[Double], item: Int): List[(Double, Vector, Double)] = {
     val usersWithRating = this._matrix.rowIter.filter(_(item) > 0).toList
 
     if (usersWithRating.isEmpty) {
@@ -33,7 +36,7 @@ class UserBasedRatingRecommender(kUsers: Int) extends ExplicitBaseRecommender {
     }.sortWith(_._1 > _._1).take(this._kUsers)
   }
 
-  protected def ratingCalculation(topKUsers: List[(Double, Vector, Double)], ratingMean: Double, item: Int): Double = {
+  private def ratingCalculation(topKUsers: List[(Double, Vector, Double)], ratingMean: Double, item: Int): Double = {
     val numerator = topKUsers.map(a => {
       a._1 * (a._2(item) - a._3)
     }).sum

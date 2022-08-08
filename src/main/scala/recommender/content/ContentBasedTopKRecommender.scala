@@ -1,23 +1,28 @@
 package recommender.content
 
-import similarity.EuclideanSimilarity
-
 import scala.math.abs
 
-class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) extends ContentBaseRecommender {
-  protected var _kSimilarItems: Int = kSimilarItems
-  protected var _kRecommendedItems: Int = kRecommendedItems
-  protected var _itemsRatedByUser: List[Int] = null
+import similarity.EuclideanSimilarity
 
-  def setNumberSimilarItems(k: Int): Unit = {
+
+class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, numberOfItems: Long) extends ContentRecommender(numberOfItems) {
+  private var _kSimilarItems: Int = kSimilarItems
+  private var _kRecommendedItems: Int = kRecommendedItems
+  private var _itemsRatedByUser: List[Int] = null
+
+  def getKSimilarItems: Int = this._kSimilarItems
+
+  def setKSimilarItems(k: Int): Unit = {
     this._kSimilarItems = k
   }
+
+  def getKRecommendedItems: Int = this._kRecommendedItems
 
   def setKRecommendedItems(k: Int): Unit = {
     this._kRecommendedItems = k
   }
 
-  def solveSimilarity(targetItem: Array[Double], otherItem: Array[Double]): Double = {
+  private def solveSimilarity(targetItem: Array[Double], otherItem: Array[Double]): Double = {
     val similarity = this._similarity.getSimilarity(targetItem, otherItem)
 
     if (similarity == 0.0) {
@@ -27,7 +32,7 @@ class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) ex
     }
   }
 
-  protected def getKSimilarItems(targetItem: Array[Double]): List[(Double, Int)] = {
+  private def getKSimilarItems(targetItem: Array[Double]): List[(Double, Int)] = {
     if (this._itemsRatedByUser.isEmpty) {
       return List()
     }
@@ -46,7 +51,7 @@ class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int) ex
     correlations.zip(this._itemsRatedByUser).sortWith(_._1 > _._1).take(this._kSimilarItems)
   }
 
-  protected def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
+  private def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
       a._1 * targetUser(a._2)
     }).sum

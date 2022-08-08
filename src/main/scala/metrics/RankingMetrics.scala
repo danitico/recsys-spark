@@ -1,9 +1,10 @@
 package metrics
 
+
 class RankingMetrics extends Serializable {
-  protected var _k: Int = 5
-  protected var _selected: Set[Int] = Set()
-  protected var _relevant: Set[Int] = Set()
+  private var _k: Int = 5
+  private var _selected: Set[Int] = Set()
+  private var _relevant: Set[Int] = Set()
 
   def this(k: Int, selected: Set[Int], relevant: Set[Int]) = {
     this()

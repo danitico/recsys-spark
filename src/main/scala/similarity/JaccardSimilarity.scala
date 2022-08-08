@@ -1,5 +1,6 @@
 package similarity
 
+
 class JaccardSimilarity extends BaseSimilarity {
   def getSimilarity(firstArray: Array[Double], secondArray: Array[Double]): Double = {
     val arrays = firstArray.zip(secondArray)
