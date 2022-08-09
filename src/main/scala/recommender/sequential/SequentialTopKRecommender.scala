@@ -2,7 +2,7 @@ package recommender.sequential
 
 import org.apache.spark.ml.fpm.FPGrowth
 import org.apache.spark.ml.linalg.Vectors
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, explode, max, min, monotonically_increasing_id, struct, udf, when, window}
+import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
 import org.apache.spark.sql.DataFrame
 
 import som.{SOM, SOMModel}
@@ -14,13 +14,14 @@ import recommender.BaseRecommender
 class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems) {
   private var _k: Int = kRecommendedItems
   private var _transactionDf: DataFrame = null
+  private var _transactionArray: Array[(Int, Array[Double])] = null
   private var _transactionModel: SOMModel = null
   private var _periodRanges: Seq[(Long, String, String)] = null
   private var _durationPeriod: String = ""
   private var _periods: Seq[(Long, String, String)] = null
   private var _periodsIds: List[Long] = null
   private var _numberPeriods: Int = -1
-  private var _rules: DataFrame = null
+  private var _rules: Array[(Array[String], Array[String], Double, Double)] = null
   private var _heightGridSom: Int = 5
   private var _widthGridSom: Int = 5
   private var _minSupportApriori: Double = 0.0
@@ -78,6 +79,18 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
 
     // Generating sequential rules as in CMRULES
     this.obtainRules()
+
+    // Convert transaction df to array to speedup prediction phase
+    this._transactionArray = this._transactionDf.filter(
+      col("period_id") === this._periodsIds.last
+    ).select(
+      "transaction_cluster", "features"
+    ).collect().map(transaction => {
+      (
+        transaction.getInt(0),
+        transaction.getList(1).toArray().map(_.asInstanceOf[Double])
+      )
+    })
   }
 
   override def transform(transactionsUser: DataFrame): Seq[(Int, Double)] = {
@@ -93,43 +106,30 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
     if (desiredConsequent == -1) {
       Seq()
     } else {
-      val binaryToInt = udf((row: List[Double]) => {
-        row.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
+      val transactionsAtT = this._transactionArray.filter(transaction => {
+        transaction._1 == desiredConsequent
       })
 
-      val transactionsAtT = this._transactionDf.filter(
-        col("transaction_cluster") === desiredConsequent
-      ).filter(
-        col("period_id") === this._periodsIds.last
-      )
-
-
-      if (transactionsAtT.rdd.isEmpty()) {
+      if (transactionsAtT.isEmpty) {
         Seq()
       } else {
         val previouslyItems = transactionsUser.select(
           "item_id"
         ).distinct().collect().map(_.getInt(0)).toSet
 
-        val candidates = transactionsAtT.select("features").withColumn(
-          "items",
-          binaryToInt(col("features"))
-        ).drop("features").withColumn(
-          "items",
-          explode(col("items"))
-        ).groupBy("items").count().filter(col("count") > 0)
+        val candidates = transactionsAtT.map(transaction => {
+          transaction._2.zipWithIndex.filter(_._1 > 0.0).map(_._2 + 1)
+        }).reduce((a: Array[Int], b: Array[Int]) => {
+          a ++ b
+        }).groupBy(identity).map(possibleCandidate => {
+          (possibleCandidate._1, possibleCandidate._2.length.toDouble)
+        }).filter(_._2 > 0).toSeq
 
-        val selectedCandidates = candidates.filter(row => {
-          !previouslyItems.contains(row.getInt(0))
-        }).orderBy(
-          col("count").desc
-        ).select("items", "count").head(this._k).map(candidate => {
-          (candidate.getInt(0), candidate.getLong(1).toDouble)
-        }).sortWith(
-          _._2 > _._2
+        candidates.filter(candidate => {
+          !previouslyItems.contains(candidate._1)
+        }).sortWith(_._2 > _._2).take(
+          this._k
         )
-
-        selectedCandidates
       }
     }
   }
@@ -200,27 +200,24 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
   }
 
   private def getMostAppropriateConsequent(items: List[String]): Int = {
-    val getScore = udf((antecedent: List[String], support: Double, confidence: Double) => {
-      val similarity = antecedent.map(element => {
+    val score = this._rules.map(rule => {
+      val similarity = rule._1.map(element => {
         if (items.contains(element)) 1 else 0
       }).sum.toDouble
 
-      similarity * support * confidence
+      similarity * rule._3 * rule._4
     })
 
-    val rulesWithScore = this._rules.withColumn(
-      "score",
-      getScore(col("antecedent"), col("support"), col("confidence"))
-    ).filter(col("score") > 0)
+    val rulesWithScore = this._rules.zip(score).map {
+      case ((a, b, c, d), e) => (a, b, c, d, e)
+    }.filter(_._5 > 0)
 
-    if (rulesWithScore.rdd.isEmpty()) {
+    if (rulesWithScore.isEmpty) {
       -1
     } else {
-      rulesWithScore.orderBy(
-        col("score").desc
-      ).select(
-        "consequent"
-      ).first().getList(0).toArray.head.asInstanceOf[String].split("_").head.toInt
+      rulesWithScore.sortWith(
+        _._5 > _._5
+      ).head._2.head.split("_").head.toInt
     }
   }
 
@@ -509,6 +506,13 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
       col("support") > this._minSupportSequential
     ).filter(
       col("confidence") > this._minConfidenceSequential
-    )
+    ).collect().map(rule => {
+      (
+        rule.getList(0).toArray().map(_.asInstanceOf[String]),
+        rule.getList(1).toArray().map(_.asInstanceOf[String]),
+        rule.getDouble(2),
+        rule.getDouble(3)
+      )
+    })
   }
 }
