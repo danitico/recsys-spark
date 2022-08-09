@@ -83,7 +83,7 @@ class HybridRecommenderTopK(kRecommendedItems: Int, numberOfItems: Long) extends
       predictionsFirstRecommender = this._firstRecommender.transform(explicitArray)
     }
 
-    if (this._isFirstRecommenderSequential) {
+    if (this._isSecondRecommenderSequential) {
       predictionsSecondRecommender = this._secondRecommender.transform(test)
     } else {
       predictionsSecondRecommender = this._secondRecommender.transform(explicitArray)
