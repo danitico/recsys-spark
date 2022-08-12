@@ -53,7 +53,7 @@ class ContentBasedTopKRecommender(kSimilarItems: Int, kRecommendedItems: Int, nu
 
   private def ratingCalculation(topKItems: List[(Double, Int)], targetUser: Array[Double]): Double = {
     val numerator = topKItems.map(a => {
-      a._1 * targetUser(a._2)
+      a._1 * targetUser(a._2 - 1)
     }).sum
 
     val denominator = topKItems.map(_._1).reduce(abs(_) + abs(_))

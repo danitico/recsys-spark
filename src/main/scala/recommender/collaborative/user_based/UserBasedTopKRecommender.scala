@@ -70,6 +70,6 @@ class UserBasedTopKRecommender(kUsers: Int, kItems: Int, numberOfItems: Long) ex
 
         (item + 1, rating)
       }
-    }).sortWith(_._2 > _._2).take(this._kItems).toSeq
+    }).sortBy(- _._2).take(this._kItems).toSeq
   }
 }
