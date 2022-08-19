@@ -18,7 +18,6 @@
 import org.apache.spark.sql.types.{DoubleType, IntegerType, LongType, StructField, StructType}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, collect_list, from_unixtime}
-
 import accumulator.ListBufferAccumulator
 import metrics.RankingMetrics
 import recommender.BaseRecommender
@@ -26,7 +25,8 @@ import recommender.collaborative.item_based.ItemBasedTopKRecommender
 import recommender.collaborative.user_based.UserBasedTopKRecommender
 import recommender.content.ContentBasedTopKRecommender
 import recommender.hybrid.HybridRecommenderTopK
-import similarity.BaseSimilarity
+import recommender.sequential.SequentialTopKRecommender
+import similarity._
 
 
 object Main {
@@ -340,13 +340,44 @@ object Main {
     ).config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
     ).config(
-      "spark.jars", "path-to/sparkml-som_2.12-0.2.1.jar"
+      "spark.jars", "lib/sparkml-som_2.12-0.2.1.jar"
     ).appName(
       "TFM"
     ).getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
 
     println("Try here your recommender")
+//    User based approach
+//    val results = userBasedTopKCrossValidation(new PearsonSimilarity, 25, 5, 1682)
+//    println(results)
+
+//    Item based approach
+//    val results = itemBasedTopKCrossValidation(new CosineSimilarity, 25, 5, 1682)
+//    println(results)
+
+//    Content based approach
+//    val results = contentBasedTopKCrossValidation(new EuclideanSimilarity, 25, 5, 1682)
+//    println(results)
+
+//    Hybrid approaches
+//    val recSys1 = new UserBasedTopKRecommender(25, 5, 1682)
+//    recSys1.setSimilarity(new PearsonSimilarity)
+
+//    val recSys1 = new ItemBasedTopKRecommender(25, 5, 1682)
+//    recSys1.setSimilarity(new PearsonSimilarity)
+
+//    val recSys1 = new ContentBasedTopKRecommender(25, 5, 1682)
+//    recSys1.setSimilarity(new PearsonSimilarity)
+
+//    val recSys2 = new SequentialTopKRecommender(5, 1682).setGridSize(
+//      3, 3
+//    ).setPeriods(5).setMinParamsApriori(
+//      0.01, 0.95
+//    ).setMinParamsSequential(
+//      0.01, 0.95
+//    )
+//    val results = hybridCrossValidation(recSys1, recSys2, 0.6, 0.4, 5, 1682)
+//    println(result)
 
     spark.stop()
   }
