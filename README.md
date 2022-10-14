@@ -1,2 +1,2 @@
 # recsys-spark
-A simple implementation in Scala of a user and item based recommendation systems for Spark
+A implementation in Scala of CF, Content Based, Sequential and hybrid recommender systems for Spark.
