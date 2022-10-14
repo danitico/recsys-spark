@@ -20,6 +20,15 @@ sdk install scala 2.12.15
 sdk install java 18.0.2-open
 ```
 
+#### How can you check if it was installed correctly?
+
+Run the following command:
+
+```bash
+java -version
+scala -version
+```
+
 ### Apache Spark and Apache Hadoop
 
 Run the following commands:
@@ -41,6 +50,14 @@ And apply those changes in your configuration running:
 
 ```bash
 source $HOME/<your_configuration_file>
+```
+
+#### How can you check if it was installed correctly?
+
+Run the following command:
+
+```bash
+spark-shell
 ```
 
 ## How can you run this project?
