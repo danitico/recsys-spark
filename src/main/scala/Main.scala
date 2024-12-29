@@ -261,6 +261,85 @@ object Main {
     })
   }
 
+  def sequentialTopKCrossValidation(): Seq[(Double, Double, Double)] = {
+    val spark = SparkSession.getActiveSession.orNull
+
+    val recSys = new SequentialTopKRecommender(5, 1682).setGridSize(
+      3, 3
+    ).setPeriods(5).setMinParamsApriori(
+      0.005, 0.80
+    ).setMinParamsSequential(
+      0.001, 0.60
+    )
+
+    val predictions_accumulator1 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator1, "predictions1")
+    val predictions_accumulator2 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator2, "predictions2")
+    val predictions_accumulator3 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator3, "predictions3")
+    val predictions_accumulator4 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator4, "predictions4")
+    val predictions_accumulator5 = new ListBufferAccumulator[(Double, Double, Double)]
+    spark.sparkContext.register(predictions_accumulator5, "predictions5")
+
+    Seq(1, 2, 3, 4, 5).map(index => {
+      println("Fold " + index)
+      val train = dataset("data/train-fold" + index + ".csv")
+      val test = dataset("data/test-fold" + index + ".csv")
+
+      val accumulator = index match {
+        case 1 => predictions_accumulator1
+        case 2 => predictions_accumulator2
+        case 3 => predictions_accumulator3
+        case 4 => predictions_accumulator4
+        case 5 => predictions_accumulator5
+      }
+
+      println("train")
+      recSys.fit(train)
+      println("termina train")
+
+      println("datos test empiezan")
+      val testData = test.groupBy("user_id").agg(
+        collect_list(col("item_id")).as("items"),
+        collect_list(col("rating")).as("ratings")
+      ).collect()
+      println("datos test terminan")
+
+      testData.foreach(row => {
+        val userId = row.getInt(0)
+        val items = row.getList(1).toArray()
+        val ratings = row.getList(2).toArray()
+
+        val relevant = items.zip(ratings).filter(
+          _._2.asInstanceOf[Double] >= 4.0
+        ).map(_._1.asInstanceOf[Int]).toSet
+
+        val selected = recSys.transform(
+          train.filter(col("user_id") === userId)
+        )
+
+        accumulator.add(
+          new RankingMetrics(k = 5, selected.map(_._1).toSet, relevant).getRankingMetrics,
+        )
+      }: Unit)
+
+      val metricPerUser = accumulator.value
+      val sumMetrics = metricPerUser.reduce((a, b) => {
+        (a._1 + b._1, a._2 + b._2, a._3 + b._3)
+      })
+
+      val finalMetrics = (
+        sumMetrics._1 / metricPerUser.length,
+        sumMetrics._2 / metricPerUser.length,
+        sumMetrics._3 / metricPerUser.length
+      )
+
+      finalMetrics
+    })
+  }
+
   def hybridCrossValidation(firstRecSys: BaseRecommender, secondRecSys: BaseRecommender, weightFirstRecSys: Double, weightSecondRecSys: Double, topK: Int, numberOfItems: Int): Seq[(Double, Double, Double)] = {
     val spark = SparkSession.getActiveSession.orNull
 
@@ -337,7 +416,20 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder().master(
       "local[*]"
-    ).config(
+    )
+    .config(
+      "spark.driver.memory", "6gb"
+    )
+    .config(
+      "spark.executor.memory", "6gb"
+    )
+    .config(
+      "spark.driver.extraJavaOptions", "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+    )
+    .config(
+      "spark.executor.extraJavaOptions", "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED -agentlib:jdwp=transport=dt_socket,server=n,address=localhost:5005,suspend=n"
+    )
+    .config(
       "spark.sql.autoBroadcastJoinThreshold", "-1"
     ).config(
       "spark.jars", "lib/sparkml-som_2.12-0.2.1.jar"
@@ -347,9 +439,9 @@ object Main {
     spark.sparkContext.setLogLevel("ERROR")
 
     println("Try here your recommender")
-//    User based approach
-//    val results = userBasedTopKCrossValidation(new PearsonSimilarity, 25, 5, 1682)
-//    println(results)
+  //  User based approach
+    // val results = userBasedTopKCrossValidation(new PearsonSimilarity, 25, 5, 1682)
+    // println(results)
 
 //    Item based approach
 //    val results = itemBasedTopKCrossValidation(new CosineSimilarity, 25, 5, 1682)
@@ -378,6 +470,9 @@ object Main {
 //    )
 //    val results = hybridCrossValidation(recSys1, recSys2, 0.6, 0.4, 5, 1682)
 //    println(result)
+
+    val results = sequentialTopKCrossValidation()
+    println(results)
 
     spark.stop()
   }
