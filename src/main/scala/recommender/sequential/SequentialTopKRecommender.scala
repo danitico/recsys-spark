@@ -18,14 +18,17 @@
 package recommender.sequential
 
 import org.apache.spark.ml.fpm.FPGrowth
+import scala.jdk.CollectionConverters._
 import org.apache.spark.ml.linalg.Vectors
-import org.apache.spark.sql.functions.{col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window}
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions.{row_number, coalesce, typedLit, rank, col, collect_list, collect_set, datediff, max, min, monotonically_increasing_id, struct, udf, when, window, desc}
 import org.apache.spark.sql.DataFrame
 
 import som.{SOM, SOMModel}
 import com.github.nscala_time.time.Imports._
 
 import recommender.BaseRecommender
+import scala.collection.mutable.WrappedArray
 
 
 class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) extends BaseRecommender(numberOfItems = numberOfItems) {
@@ -38,7 +41,7 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
   private var _periods: Seq[(Long, String, String)] = null
   private var _periodsIds: List[Long] = null
   private var _numberPeriods: Int = -1
-  private var _rules: Array[(Array[String], Array[String], Double, Double)] = null
+  private var _rules: Array[(Array[Int], Array[Int], Double, Double)] = null
   private var _heightGridSom: Int = 5
   private var _widthGridSom: Int = 5
   private var _minSupportApriori: Double = 0.0
@@ -187,9 +190,7 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
       val generated = row.map(element => {
         (
           element.head._1,
-          element.head._2.map(
-            _.toString + "_" + (element.head._1 - this._periodsIds.length + 1).toString
-          )
+          element.head._2
         )
       })
 
@@ -234,7 +235,7 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
     } else {
       rulesWithScore.sortWith(
         _._5 > _._5
-      ).head._2.head.split("_").head.toInt
+      ).head._2.head
     }
   }
 
@@ -416,52 +417,94 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
   }
 
   private def obtainRules(): Unit = {
+    val to_items = udf((row: List[List[Int]]) => {
+      row.flatten.toList
+    })
+
     // udf to flatten list and add metadata to each item
-    val flatList = udf((row: List[List[(Long, List[Int])]]) => {
+    val to_sequences = udf((row: List[List[(Long, List[String])]]) => {
       // getting list of sets being the first element the id of the period
       // and as second element the item with its period
       val generated = row.map(element => {
         (
           element.head._1,
-          element.head._2.map(
-            _.toString + "_" + (element.head._1 - this._periodsIds.length + 1).toString
-          )
+          element.head._2.map(_.toInt).toSeq
         )
       })
 
       // ordering list of sequence (returning [] if that period has not items)
       // and returning a flat map (representing a transaction for the rule extractor)
-      this._periodsIds.map((id: Long) => {
+      val item_sequences = this._periodsIds.map((id: Long) => {
         if(generated.exists(_._1 == id)) {
           generated.find(_._1 == id).orNull
         } else {
           (id, Seq())
         }
-      }).sortWith(_._1 < _._1).flatMap(_._2)
+      }).sortWith(_._1 < _._1).filter(!_._2.isEmpty).map(_._2)
+
+      var seen = Set[Int]()
+
+      // Process from newest to oldest, filtering out previously seen items.
+      item_sequences.reverse.map { seq =>
+        val filtered = seq.filterNot(seen.contains)
+        // Mark any kept items as seen
+        seen = seen ++ filtered
+        filtered
+      }.reverse.filter(_.nonEmpty)
+
     })
 
     // udf to filter rules which consequent does not have an item from the period 0 (actual period)
-    val filterAntecedent = udf((row: Array[String]) => {
-      row.filter(!_.endsWith("_0"))
+    val filterAntecedent = udf((row: Array[Int]) => {
+      row
     })
 
     // udf to get X union Y from X -> Y
-    val getXY = udf((column1: List[String], column2: List[String]) => {
+    val getXY = udf((column1: List[Int], column2: List[Int]) => {
       column1 ++ column2
     })
 
-    // get transactions per period for each user
-    val transactions = this._transactionDf.groupBy("user_id", "period_id").agg(
-      collect_set(col("transaction_cluster")).as("transaction_clusters")
+    val allClusters = this._transactionDf
+      .groupBy("user_id", "period_id")
+      .agg(
+        collect_set(col("transaction_cluster")).as("transaction_clusters")
+      )
+
+    // 1. Compute frequency of each (user_id, period_id, transaction_cluster)
+    val clusterCounts = this._transactionDf
+      .groupBy("user_id", "period_id", "transaction_cluster")
+      .count()
+
+    // 2. Rank the clusters using a window specification, then keep only top 2 
+    val windowSpec = Window.partitionBy("user_id", "period_id").orderBy(desc("count"))
+
+    // Take top-2 clusters
+    val topTwoClusters = clusterCounts
+      .withColumn("rn", row_number().over(windowSpec))
+      .filter(col("rn") <= 3)
+      .groupBy("user_id", "period_id")
+      .agg(collect_set("transaction_cluster").as("top_2_clusters"))
+
+  val transactions = allClusters
+    .join(topTwoClusters, Seq("user_id","period_id"), "left") // preserve rows even if there's no "top_2_clusters"
+    .select(
+      col("user_id"),
+      col("period_id"),
+      col("transaction_clusters"),
+      coalesce(col("top_2_clusters"), typedLit(Seq.empty[String])).as("top_2_clusters")
     ).groupBy("user_id", "period_id").agg(
-      collect_list(struct(col("period_id"), col("transaction_clusters"))).as("tuple_period_cluster")
+      collect_list(struct(col("period_id"), col("top_2_clusters"))).as("tuple_period_cluster")
     ).groupBy("user_id").agg(
       collect_list(col("tuple_period_cluster")).as("tuple_period_cluster_per_user")
-    ).withColumn(
-      "items",
-      flatList(
+    )
+    .withColumn(
+      "sequences",
+      to_sequences(
         col("tuple_period_cluster_per_user")
       )
+    ).withColumn(
+      "items",
+      to_items(col("sequences"))
     ).drop("tuple_period_cluster_per_user").orderBy("user_id")
 
     // train fpgrowth model
@@ -478,29 +521,44 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
     // and removing columns of metrics related to rules
     // because they were extracted from the original rules
     // After that, distinct rules are obtained
-    val rules = model.associationRules.filter(row => {
-      val consequent = row.getList(1).toArray()
-      consequent.head.asInstanceOf[String].endsWith("_0")
-    }).withColumn(
-      "antecedent",
-      filterAntecedent(col("antecedent"))
-    ).filter(row => row.getList(0).toArray().nonEmpty).drop(
+    model.associationRules.show(truncate = false)
+    val rules = model.associationRules.filter(row => row.getList(0).toArray().nonEmpty).drop(
       "confidence", "lift", "support"
     ).distinct()
 
     // Solving support and confidence for the new set of rules
     val numberOfTransactions = transactions.count()
-    val transactionsArray = transactions.select("items").collect().map(_.getList(0).toArray())
+    val transactionsArray = transactions.select("sequences").collect().map(
+      _.getList(0).asScala.toList
+    ).toList
 
     // udf for support
-    val getSupport = udf((row: List[String]) => {
-      transactionsArray.map(transaction => {
-        if (row.toSet.subsetOf(transaction.map(_.asInstanceOf[String]).toSet)) {
-          1.0
-        } else {
-          0.0
+    val getSupport = udf((pattern: Array[Int]) => {
+      def containsSubsequence(seq: List[WrappedArray[Int]], pattern: List[Int]): Boolean = {
+        var pIndex = 0
+        var sIndex = 0
+
+        // while we still have itemsets in seq AND items in pattern
+        while (sIndex < seq.size && pIndex < pattern.size) {
+          val currentItemset = seq(sIndex)
+          val nextPatternItem = pattern(pIndex)
+
+          // if the current itemset contains that pattern item
+          if (currentItemset.contains(nextPatternItem)) {
+            // move to the next item in the pattern
+            pIndex += 1
+          }
+          // always move to the next itemset
+          sIndex += 1
         }
-      }).sum / numberOfTransactions.toDouble
+
+        // if we've matched the whole pattern (pIndex == pattern.size), success
+        pIndex == pattern.size
+      }
+
+      transactionsArray.count(
+        meow => containsSubsequence(meow, pattern.toList)
+      ).toDouble / numberOfTransactions.toDouble
     })
 
     // rules with support and confidence
@@ -516,17 +574,23 @@ class SequentialTopKRecommender(kRecommendedItems: Int, numberOfItems: Long) ext
     ).withColumn(
       "confidence",
       col("support") / col("support_antecedent")
-    ).drop("XY", "support_antecedent")
+    ).drop("XY", "support_antecedent").orderBy(desc("confidence"))
+
+    sequentialRules.show(truncate = false, numRows = 10)
 
     // filter sequential rules with min support and confidence
-    this._rules = sequentialRules.filter(
+    val gatito = sequentialRules.filter(
       col("support") > this._minSupportSequential
     ).filter(
       col("confidence") > this._minConfidenceSequential
-    ).collect().map(rule => {
+    )
+
+    gatito.show(truncate = false, numRows = 1000)
+    
+    this._rules = gatito.collect().map(rule => {
       (
-        rule.getList(0).toArray().map(_.asInstanceOf[String]),
-        rule.getList(1).toArray().map(_.asInstanceOf[String]),
+        rule.getList(0).toArray().map(_.asInstanceOf[Int]),
+        rule.getList(1).toArray().map(_.asInstanceOf[Int]),
         rule.getDouble(2),
         rule.getDouble(3)
       )

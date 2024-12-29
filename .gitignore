@@ -11,3 +11,5 @@ project/plugins/project/
 .cache
 .bsp/
 .idea
+.metals
+.bloop
